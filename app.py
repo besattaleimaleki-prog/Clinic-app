@@ -14,6 +14,8 @@ if 'doctor_name' not in st.session_state:
     st.session_state.doctor_name = None
 if 'df' not in st.session_state:
     st.session_state.df = None
+if 'doctor_passwords' not in st.session_state:
+    st.session_state.doctor_passwords = {}
 
 # تنظیمات رمزهای عبور
 ADMIN_USERNAME = "admin"
@@ -57,20 +59,22 @@ if not st.session_state.logged_in:
         doc_password = st.text_input("رمز عبور اختصاصی (پیش‌فرض: 1234)", type="password")
         
         if st.button("ورود به پنل پزشک", type="primary"):
-            if not selected_doc or len(selected_doc.strip()) == 0:
+            target_doc = selected_doc.strip() if selected_doc else ""
+            if not target_doc:
                 st.error("لطفاً نام خود را مشخص کنید.")
-            elif doc_password == DOCTOR_DEFAULT_PASSWORD:
-                st.session_state.logged_in = True
-                st.session_state.user_role = "doctor"
-                st.session_state.doctor_name = selected_doc.strip()
-                st.success(f"خوش آمدید {selected_doc}")
-                st.rerun()
             else:
-                st.error("رمز عبور اشتباه است.")
+                expected_password = st.session_state.doctor_passwords.get(target_doc, DOCTOR_DEFAULT_PASSWORD)
+                if doc_password == expected_password:
+                    st.session_state.logged_in = True
+                    st.session_state.user_role = "doctor"
+                    st.session_state.doctor_name = target_doc
+                    st.success(f"خوش آمدید {target_doc}")
+                    st.rerun()
+                else:
+                    st.error("رمز عبور اشتباه است.")
 
 # ------------------ پنل پس از ورود (Logged-in Panel) ------------------
 else:
-    # نوار کناری برای خروج و اطلاعات کاربری
     with st.sidebar:
         st.write(f"👤 **کاربر متصل:** {st.session_state.doctor_name if st.session_state.user_role == 'doctor' else 'مدیر سیستم'}")
         st.write(f"پست: {'پزشک' if st.session_state.user_role == 'doctor' else 'مدیر ارشد'}")
@@ -98,7 +102,6 @@ else:
             doctor_col = df.columns[0]
             metrics = df.columns[1:]
             
-            # محاسبه رتبه‌ها
             df_ranks = df.copy()
             for col in metrics:
                 if "ویزیت" in col or "آزمایشگاه" in col:
@@ -121,7 +124,6 @@ else:
                 selected_doc = st.selectbox("انتخاب پزشک جهت بررسی:", df[doctor_col].tolist())
                 doc_data = df[df[doctor_col] == selected_doc].iloc[0]
                 doc_ranks = df_ranks[df_ranks[doctor_col] == selected_doc].iloc[0]
-                avg_data = df[metrics].mean()
                 
                 st.subheader(f"کارنامه کامل: {selected_doc}")
                 cols = st.columns(2)
@@ -130,16 +132,17 @@ else:
                         st.metric(label=metric, value=f"{doc_data[metric]}", delta=f"رتبه {doc_ranks[metric]} از {len(df)}")
 
             with tab3:
-                st.info("برای چاپ یا ذخیره PDF گزارشات کل، از گزینه Print مرورگر (Share > Print در گوشی) استفاده کنید.")
+                st.info("برای چاپ یا ذخیره PDF گزارشات کل، از گزینه Print مرورگر استفاده کنید.")
 
         else:
-            st.warning("⚠️ هنوز هیچ فایل اکسلی بارگذاری نشده است. برای فعال شدن داشبورد، لطفاً کادر بالا را لمس کرده و فایل اکسل را آپلود کنید.")
+            st.warning("⚠️ هنوز هیچ فایل اکسلی بارگذاری نشده است.")
 
     # -------------------------------------------------------------
     # ۲. بخش دسترسی محدود پزشک (DOCTOR)
     # -------------------------------------------------------------
     elif st.session_state.user_role == "doctor":
-        st.title(f"👨‍⚕️ پنل اختصاصی: {st.session_state.doctor_name}")
+        current_doc = st.session_state.doctor_name
+        st.title(f"👨‍⚕️ پنل اختصاصی: {current_doc}")
 
         if st.session_state.df is None:
             st.warning("⚠️ اطلاعات درمانگاه هنوز توسط مدیر بارگذاری نشده است. لطفاً منتظر بمانید تا مدیر فایل اکسل را آپلود کند.")
@@ -147,7 +150,6 @@ else:
             df = st.session_state.df
             doctor_col = df.columns[0]
             metrics = df.columns[1:]
-            current_doc = st.session_state.doctor_name
 
             if current_doc not in df[doctor_col].values:
                 st.error(f"❌ نام شما ({current_doc}) در فایل اکسل بارگذاری‌شده پیدا نشد. لطفاً با مدیر سیستم تماس بگیرید.")
@@ -155,7 +157,6 @@ else:
                 doc_data = df[df[doctor_col] == current_doc].iloc[0]
                 avg_data = df[metrics].mean()
                 
-                # محاسبه رتبه
                 df_ranks = df.copy()
                 for col in metrics:
                     if "ویزیت" in col or "آزمایشگاه" in col:
@@ -166,7 +167,6 @@ else:
 
                 st.markdown("این گزارش صرفاً جهت بررسی عملکرد شخص شما و مقایسه با استاندارد درمانگاه تنظیم شده است.")
 
-                # ۱. خلاصه عملکرد
                 st.subheader("📋 خلاصه آمار و رتبه شما در درمانگاه")
                 cols = st.columns(2)
                 for i, metric in enumerate(metrics):
@@ -180,13 +180,11 @@ else:
 
                 st.markdown("---")
 
-                # ۲. هشدارهای هوشمند
                 st.subheader("⚠️ تحلیل هوشمند و هشدارهای تجویزی شما")
                 warnings, goods = [], []
                 for metric in metrics:
                     val = doc_data[metric]
                     avg = avg_data[metric]
-                    diff = val - avg
                     
                     if "ویزیت" not in metric and "آزمایشگاه" not in metric:
                         if val > avg * 1.25:
@@ -212,9 +210,7 @@ else:
 
                 st.markdown("---")
 
-                # ۳. نمودارهای افقی مقایسه فرد با میانگین
                 st.subheader("📊 مقایسه عملکرد شما با میانگین کل درمانگاه")
-                
                 comp_df = pd.DataFrame({
                     'شاخص': list(metrics) * 2,
                     'مقدار': list(doc_data[metrics].values) + list(avg_data.values),
@@ -234,7 +230,6 @@ else:
                 )
                 st.plotly_chart(fig_compare, use_container_width=True)
 
-                # ۴. میزان درصد انحراف
                 st.subheader("🎯 درصد انحراف شما از میانگین درمانگاه")
                 pct_diff = [((doc_data[m] - avg_data[m]) / avg_data[m]) * 100 if avg_data[m] != 0 else 0 for m in metrics]
                 diff_df = pd.DataFrame({'شاخص': metrics, 'درصد انحراف': pct_diff})
@@ -252,3 +247,23 @@ else:
                 )
                 fig_diff.add_vline(x=0, line_dash="dash", line_color="black")
                 st.plotly_chart(fig_diff, use_container_width=True)
+
+        st.markdown("---")
+        # ------------------ بخش تغییر رمز عبور پزشک ------------------
+        with st.expander("🔑 تغییر رمز عبور حساب کاربری"):
+            st.write("در صورت تمایل می‌توانید رمز عبور ورود خود را تغییر دهید:")
+            old_pass = st.text_input("رمز عبور فعلی:", type="password")
+            new_pass = st.text_input("رمز عبور جدید:", type="password")
+            confirm_pass = st.text_input("تکرار رمز عبور جدید:", type="password")
+            
+            if st.button("ثبت رمز عبور جدید"):
+                current_pass = st.session_state.doctor_passwords.get(current_doc, DOCTOR_DEFAULT_PASSWORD)
+                if old_pass != current_pass:
+                    st.error("رمز عبور فعلی وارد شده نادرست است.")
+                elif not new_pass or len(new_pass.strip()) < 4:
+                    st.error("رمز عبور جدید باید حداقل ۴ کاراکتر باشد.")
+                elif new_pass != confirm_pass:
+                    st.error("رمز عبور جدید و تکرار آن یکسان نیستند.")
+                else:
+                    st.session_state.doctor_passwords[current_doc] = new_pass
+                    st.success("رمز عبور شما با موفقیت تغییر کرد. در ورودهای بعدی از رمز جدید استفاده کنید.")
