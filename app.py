@@ -219,8 +219,8 @@ if login_type == "ورود مدیر / ادمین 🛠️":
                 st.rerun()
             else:
                 st.error("نام کاربری یا رمز عبور ادمین اشتباه است.")
-    else:
-        st.subheader("ورود اختصاصی پزشک")
+            else:
+                st.subheader("ورود اختصاصی پزشک")
         if st.session_state.df is not None:
             df = st.session_state.df
             doctor_col = df.columns[0]
