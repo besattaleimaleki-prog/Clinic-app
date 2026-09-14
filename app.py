@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import os
 import json
 
@@ -37,24 +36,91 @@ def calculate_ranks(df, metrics):
     df_ranks = df.copy()
     for col in metrics:
         numeric_col = pd.to_numeric(df[col], errors='coerce')
-        if "ویزیت" in col or "آزمایشگاه" in col:
+        if "ویزیت" in col or "آزمایشگاه" in col or "نسخ" in col:
             ranks = numeric_col.rank(ascending=False, method='min')
         else:
             ranks = numeric_col.rank(ascending=True, method='min')
         df_ranks[col] = ranks.fillna(0).astype(int)
     return df_ranks
 
-def classify_drug_form(drug_name):
-    """تشخیص نوع دارو (خوراکی / تزریقی / سایر) بر اساس پیشوندها"""
+# ------------------ توابع دسته‌بندی و فیلتر هوشمند داروها ------------------
+def classify_drug(drug_name):
+    """تحلیل و دسته‌بندی هوشمند دارو بر اساس نام و شکل دارویی"""
     name_lower = str(drug_name).strip().lower()
-    oral_prefixes = ['tab', 'cap', 'syru', 'susp', 'syrup']
-    inj_prefixes = ['inj', 'infusion', 'solution', 'amp']
+    
+    # تشخیص پماد برای استثنا کردن
+    is_oint = any(k in name_lower for k in ['oint', 'ointment', 'پماد'])
+    
+    # ۱. اشکال خوراکی
+    oral_prefixes = ['tab', 'cap', 'syru', 'susp', 'syrup', 'قرص', 'کپسول', 'شربت', 'ساسپنشن']
+    is_oral = any(name_lower.startswith(p) or f" {p}" in name_lower for p in oral_prefixes)
+    
+    # ۲. عمومی تزریقی
+    inj_gen_prefixes = ['inj', 'infusion', 'solution', 'amp', 'vial', 'تزریقی', 'آمپول']
+    is_inj_gen = any(name_lower.startswith(p) or f" {p}" in name_lower or f"{p} " in name_lower for p in inj_gen_prefixes)
+    
+    # ۳. فقط Inj
+    is_inj_strict = 'inj' in name_lower or 'آمپول' in name_lower
+    
+    # ۴. آنتی‌بیوتیک‌ها (بدون پماد)
+    abx_keywords = [
+        'amox', 'amoxicillin', 'ampicillin', 'cef', 'ceph', 'azithro', 'azithromycin',
+        'cipro', 'ciprofloxacin', 'levo', 'levofloxacin', 'metronidazole', 'flagyl',
+        'co-amox', 'amox-clav', 'penicillin', 'pen', 'genta', 'gentamicin', 'vanco',
+        'doxy', 'doxycycline', 'erythro', 'erythromycin', 'clarithro', 'clarithromycin',
+        'cotrim', 'co-trimoxazole', 'cefixim', 'cefixime', 'cephalexin', 'ceftriaxon',
+        'ceftriaxone', 'cefazolin', 'clinda', 'clindamycin', 'meropenem', 'imipenem',
+        'nitrofurantoin'
+    ]
+    is_abx = (not is_oint) and any(k in name_lower for k in abx_keywords)
+    
+    # ۵. مسکن‌های NSAID (بدون پماد)
+    nsaid_keywords = [
+        'ibuprofen', 'gelofen', 'indomethacin', 'diclofenac', 'naproxen',
+        'meloxicam', 'piroxicam', 'celecoxib', 'mefenamic', 'aspirin',
+        'ketorolac', 'ketoprofen', 'flurbiprofen', 'tenoxicam', 'nimesulide',
+        'پروفن', 'ژلوفن', 'دیکلوفناک', 'ناپروکسن', 'مفنامیک'
+    ]
+    is_nsaid = (not is_oint) and any(k in name_lower for k in nsaid_keywords)
+    
+    # ۶. کورتیکواستروئیدها (بدون پماد)
+    cortico_keywords = [
+        'dexa', 'dexamethasone', 'beta', 'betamethasone', 'hydrocortisone',
+        'prednisolone', 'prednisone', 'triamcinolone', 'methylprednisolone',
+        'budesonide', 'fluticasone', 'clobetasol', 'mometasone', 'cortison',
+        'دگزا', 'بتامتازون', 'هیدروکورتیزون', 'پرنیزولون', 'تریامسینولون'
+    ]
+    is_cortico = (not is_oint) and any(k in name_lower for k in cortico_keywords)
+    
+    return {
+        "oral": is_oral,
+        "inj_gen": is_inj_gen,
+        "inj_strict": is_inj_strict,
+        "abx": is_abx,
+        "nsaid": is_nsaid,
+        "cortico": is_cortico
+    }
 
-    if any(name_lower.startswith(p) for p in oral_prefixes):
-        return "خوراکی 💊"
-    elif any(name_lower.startswith(p) for p in inj_prefixes):
-        return "تزریقی 💉"
-    return "سایر 📦"
+def filter_drug_list(drugs_list, category):
+    """فیلتر کردن لیست داروها بر اساس دسته انتخابی کاربر"""
+    result = []
+    for d in drugs_list:
+        info = classify_drug(d)
+        if category == "همه اشکال":
+            result.append(d)
+        elif category == "خوراکی (Tab, Cap, Syru, Susp)" and info["oral"]:
+            result.append(d)
+        elif category == "تزریقی عمومی (Inj, Infusion, Solution)" and info["inj_gen"]:
+            result.append(d)
+        elif category == "فقط تزریقی (Inj)" and info["inj_strict"]:
+            result.append(d)
+        elif category == "آنتی‌بیوتیک‌ها (بدون Ointment)" and info["abx"]:
+            result.append(d)
+        elif category == "مسکن‌های NSAID (بدون Ointment)" and info["nsaid"]:
+            result.append(d)
+        elif category == "کورتیکواستروئیدها (بدون Ointment)" and info["cortico"]:
+            result.append(d)
+    return result
 
 # ------------------ توابع راهنمای بالینی ------------------
 def get_clinical_guideline(metric_name, user_val, avg_val):
@@ -185,10 +251,11 @@ else:
     if st.session_state.user_role == "admin":
         st.title("🛠️ پنل مدیریت و ارزیابی کل درمانگاه")
 
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
             "📈 مقایسه کل پزشکان", 
             "👤 بررسی فردی پزشکان", 
             "💊 درصد دارو به پزشک", 
+            "📋 دارو به نسخه",
             "📝 بازخورد و توصیه‌های مدیریت", 
             "💾 خروجی PDF"
         ])
@@ -243,7 +310,18 @@ else:
                     with cols[i % 2]:
                         st.metric(label=metric, value=f"{doc_data[metric]}", delta=f"رتبه {doc_ranks[metric]} از {len(df)}")
 
-        # --- تب ۳: درصد دارو به پزشک (پنل جدید) ---
+        # --- لیست گزینه‌های فیلتر دارویی مشترک ---
+        filter_options = [
+            "همه اشکال", 
+            "خوراکی (Tab, Cap, Syru, Susp)", 
+            "تزریقی عمومی (Inj, Infusion, Solution)",
+            "فقط تزریقی (Inj)",
+            "آنتی‌بیوتیک‌ها (بدون Ointment)",
+            "مسکن‌های NSAID (بدون Ointment)",
+            "کورتیکواستروئیدها (بدون Ointment)"
+        ]
+
+        # --- تب ۳: درصد دارو به پزشک ---
         with tab3:
             st.header("💊 سهم و درصد تجویز داروها به تفکیک پزشک")
             st.markdown("فایل اکسل شامل ۳ ستون: **۱. نام پزشک** | **۲. نام و شکل دارو** | **۳. تعداد تجویزی** را آپلود کنید.")
@@ -270,11 +348,11 @@ else:
                 drug_c = df_d.columns[1]
                 qty_c = df_d.columns[2]
 
-                # تبدیل مقادیر تعداد به عدد و پاکسازی داده‌ها
+                # پاکسازی مقادیر
                 df_d[qty_c] = pd.to_numeric(df_d[qty_c], errors='coerce').fillna(0)
                 df_d[drug_c] = df_d[drug_c].astype(str).str.strip()
 
-                # محاسبه مجموع تجویز هر دارو و حذف داروهایی که مجموع تجویزشون صفر است
+                # حذف داروهای با مجموع تجویز صفر
                 drug_totals = df_d.groupby(drug_c)[qty_c].sum()
                 valid_drugs = drug_totals[drug_totals > 0].index.tolist()
                 df_filtered = df_d[df_d[drug_c].isin(valid_drugs)].copy()
@@ -282,31 +360,18 @@ else:
                 if len(valid_drugs) == 0:
                     st.warning("هیچ دارویی با مجموع تجویز بیشتر از صفر یافت نشد.")
                 else:
-                    # فیلتر بر اساس نوع شکل دارویی (پیشوند)
-                    form_filter = st.radio("فیلتر بر اساس شکل دارویی:", ["همه اشکال", "خوراکی (Tab, Cap, Syru, Susp)", "تزریقی (Inj, Infusion, Solution)"], horizontal=True)
+                    form_filter = st.radio("🔍 انتخاب فیلتر دسته‌بندی دارویی:", filter_options, horizontal=True, key="filter_tab3")
                     
-                    # فیلتر لیست داروها بر اساس انتخاب شکل دارویی
-                    selectable_drugs = []
-                    for d in valid_drugs:
-                        form = classify_drug_form(d)
-                        if form_filter == "همه اشکال":
-                            selectable_drugs.append(d)
-                        elif "خوراکی" in form_filter and "خوراکی" in form:
-                            selectable_drugs.append(d)
-                        elif "تزریقی" in form_filter and "تزریقی" in form:
-                            selectable_drugs.append(d)
+                    selectable_drugs = filter_drug_list(valid_drugs, form_filter)
 
                     if not selectable_drugs:
                         st.info("دارویی در دسته انتخابی یافت نشد.")
                     else:
-                        selected_drug = st.selectbox("🔍 داروی مورد نظر را انتخاب یا سرچ کنید:", selectable_drugs)
+                        selected_drug = st.selectbox("🔍 داروی مورد نظر را انتخاب یا سرچ کنید:", selectable_drugs, key="select_drug_tab3")
 
                         if selected_drug:
-                            # استخراج داده‌های داروی انتخابی
                             drug_df = df_filtered[df_filtered[drug_c] == selected_drug]
                             doc_grouped = drug_df.groupby(doc_c)[qty_c].sum().reset_index()
-                            
-                            # حذف پزشکانی که برای این داروی خاص تجویز zero داشته‌اند
                             doc_grouped = doc_grouped[doc_grouped[qty_c] > 0]
                             
                             total_drug_qty = doc_grouped[qty_c].sum()
@@ -314,9 +379,8 @@ else:
                             doc_grouped['برچسب_نمودار'] = doc_grouped.apply(lambda r: f"{int(r[qty_c])} عدد ({r['درصد']:.1f}%)", axis=1)
 
                             st.markdown("---")
-                            st.subheader(f"📊 سهم تجویز داروی: `{selected_drug}` ({classify_drug_form(selected_drug)})")
+                            st.subheader(f"📊 سهم تجویز داروی: `{selected_drug}`")
 
-                            # رسم نمودار ستونی سهم پزشکان
                             fig_drug = px.bar(
                                 doc_grouped,
                                 x=doc_c,
@@ -325,23 +389,128 @@ else:
                                 labels={doc_c: 'نام پزشک', qty_c: 'فراوانی تجویز (تعداد)'},
                                 color=qty_c,
                                 color_continuous_scale='Blues',
-                                title=f"توزیع تجویز {selected_drug} بین پزشکان"
+                                title=f"توزیع درصد و تعداد تجویز {selected_drug} بین پزشکان"
                             )
                             fig_drug.update_traces(textposition='outside')
                             fig_drug.update_layout(yaxis_title="تعداد تجویزی", xaxis_title="نام پزشک")
                             st.plotly_chart(fig_drug, use_container_width=True)
 
-                            # نمایش مجموع کل تجویز در زیر نمودار
                             st.metric(
                                 label=f"📦 مجموع کل تعداد تجویزی داروی {selected_drug} در درمانگاه",
                                 value=f"{int(total_drug_qty):,} عدد"
                             )
-
             else:
                 st.warning("⚠️ هنوز هیچ فایل اکسلی برای اقلام دارویی بارگذاری نشده است.")
 
-        # --- تب ۴: بازخوردها ---
+        # --- تب ۴: دارو به نسخه (جدید) ---
         with tab4:
+            st.header("📋 میزان تجویز هر دارو به ازای هر نسخه (تلفیق دو فایل اکسل)")
+            st.markdown("این تب با تقسیم **مجموع عدد داروی تجویز شده** بر **تعداد کل نسخ هر پزشک**، میزان تجویز دارو در هر نسخه را محاسبه می‌کند.")
+
+            if st.session_state.df is None or st.session_state.df_drugs is None:
+                st.error("⚠️ برای استفاده از این بخش، باید هم فایل **شاخص‌های کل درمانگاه** (دارای تعداد نسخ) و هم فایل **اقلام دارویی** بارگذاری شده باشند.")
+            else:
+                df_main = st.session_state.df.copy()
+                df_d = st.session_state.df_drugs.copy()
+
+                main_doc_col = df_main.columns[0]
+                metrics = df_main.columns[1:]
+
+                # پیدا کردن خودکار ستون تعداد نسخ
+                rx_candidates = [c for c in metrics if any(kw in c for kw in ['نسخه', 'نسخ', 'کل', 'ویزیت', 'تعداد'])]
+                default_rx_col = rx_candidates[0] if rx_candidates else metrics[0]
+
+                rx_col = st.selectbox(
+                    "📌 ستون مربوط به تعداد کل نسخ / ویزیت پزشکان را تایید کنید:", 
+                    metrics, 
+                    index=metrics.tolist().index(default_rx_col) if default_rx_col in metrics.tolist() else 0,
+                    key="select_rx_col"
+                )
+
+                drug_doc_col = df_d.columns[0]
+                drug_name_col = df_d.columns[1]
+                drug_qty_col = df_d.columns[2]
+
+                df_d[drug_qty_col] = pd.to_numeric(df_d[drug_qty_col], errors='coerce').fillna(0)
+                df_d[drug_name_col] = df_d[drug_name_col].astype(str).str.strip()
+
+                # حذف داروهای با کل تجویز صفر
+                drug_totals = df_d.groupby(drug_name_col)[drug_qty_col].sum()
+                valid_drugs = drug_totals[drug_totals > 0].index.tolist()
+
+                if not valid_drugs:
+                    st.warning("هیچ دارویی با مجموع تجویز بیشتر از صفر یافت نشد.")
+                else:
+                    form_filter_rx = st.radio("🔍 انتخاب فیلتر دسته‌بندی دارویی:", filter_options, horizontal=True, key="filter_tab4")
+                    selectable_drugs_rx = filter_drug_list(valid_drugs, form_filter_rx)
+
+                    if not selectable_drugs_rx:
+                        st.info("دارویی در دسته انتخابی یافت نشد.")
+                    else:
+                        selected_drug_rx = st.selectbox("🔍 داروی مورد نظر را انتخاب یا سرچ کنید:", selectable_drugs_rx, key="select_drug_tab4")
+
+                        if selected_drug_rx:
+                            # محاسبه تجویز هر پزشک برای این دارو
+                            drug_df = df_d[df_d[drug_name_col] == selected_drug_rx]
+                            doc_drug_sum = drug_df.groupby(drug_doc_col)[drug_qty_col].sum().reset_index()
+
+                            # استخراج تعداد نسخ پزشکان از اکسل اصلی
+                            doc_rx_counts = df_main[[main_doc_col, rx_col]].copy()
+                            doc_rx_counts[rx_col] = pd.to_numeric(doc_rx_counts[rx_col], errors='coerce').fillna(0)
+
+                            # ادغام دو جدول بر اساس نام پزشک
+                            merged_df = pd.merge(doc_drug_sum, doc_rx_counts, left_on=drug_doc_col, right_on=main_doc_col, how='inner')
+                            
+                            # حذف پزشکان بدون نسخه یا بدون تجویز این دارو
+                            merged_df = merged_df[(merged_df[drug_qty_col] > 0) & (merged_df[rx_col] > 0)].copy()
+
+                            if merged_df.empty:
+                                st.warning("اطلاعات مشترکی بین پزشکان دو فایل برای این دارو یافت نشد.")
+                            else:
+                                # محاسبه شاخص دارو به نسخه
+                                merged_df['میزان_به_ازای_نسخه'] = merged_df[drug_qty_col] / merged_df[rx_col]
+                                merged_df['برچسب_نمودار'] = merged_df.apply(
+                                    lambda r: f"{r['میزان_به_ازای_نسخه']:.2f} عدد (کل: {int(r[drug_qty_col]):,} از {int(r[rx_col]):,} نسخه)", 
+                                    axis=1
+                                )
+
+                                st.markdown("---")
+                                st.subheader(f"📊 میزان تجویز داروی `{selected_drug_rx}` به ازای هر نسخه")
+
+                                fig_rx = px.bar(
+                                    merged_df,
+                                    x=drug_doc_col,
+                                    y='میزان_به_ازای_نسخه',
+                                    text='برچسب_نمودار',
+                                    labels={drug_doc_col: 'نام پزشک', 'میزان_به_ازای_نسخه': 'عدد دارو در هر نسخه'},
+                                    color='میزان_به_ازای_نسخه',
+                                    color_continuous_scale='Tealgrn',
+                                    title=f"میانگین عدد تجویز {selected_drug_rx} در هر نسخه به تفکیک پزشک"
+                                )
+                                fig_rx.update_traces(textposition='outside')
+                                fig_rx.update_layout(yaxis_title="تعداد دارو به ازای هر نسخه", xaxis_title="نام پزشک")
+                                st.plotly_chart(fig_rx, use_container_width=True)
+
+                                # خلاصه آمار زیر نمودار
+                                total_prescribed = merged_df[drug_qty_col].sum()
+                                total_prescriptions = merged_df[rx_col].sum()
+                                overall_avg = total_prescribed / total_prescriptions if total_prescriptions > 0 else 0
+
+                                col_m1, col_m2, col_m3 = st.columns(3)
+                                with col_m1:
+                                    st.metric("📦 کل عدد تجویز شده دارو", f"{int(total_prescribed):,} عدد")
+                                cheerfully_with = col_m2.metric("📜 مجموع کل نسخ پزشکان", f"{int(total_prescriptions):,} نسخه")
+                                with col_m3:
+                                    st.metric("📊 میانگین کلی درمانگاه", f"{overall_avg:.2f} عدد در هر نسخه")
+
+                                st.subheader("📋 جدول تفکیکی اطلاعات")
+                                display_table = merged_df[[drug_doc_col, drug_qty_col, rx_col, 'میزان_به_ازای_نسخه']].copy()
+                                display_table.columns = ['نام پزشک', 'تعداد کل تجویز دارو', 'تعداد کل نسخ', 'میزان به ازای هر نسخه']
+                                display_table['میزان به ازای هر نسخه'] = display_table['میزان به ازای هر نسخه'].round(2)
+                                st.dataframe(display_table.set_index('نام پزشک'), use_container_width=True)
+
+        # --- تب ۵: بازخوردها ---
+        with tab5:
             st.header("📝 مدیریت توصیه‌ها و بازخوردهای مدیریت")
             gen_note = st.text_area("متن پیام عمومی مدیریت:", value=st.session_state.admin_general_notes, height=100)
             if st.button("ذخیره پیام عمومی", type="primary"):
@@ -361,8 +530,8 @@ else:
                     save_settings()
                     st.success("توصیه اختصاصی ذخیره شد.")
 
-        # --- تب ۵: PDF ---
-        with tab5:
+        # --- تب ۶: PDF ---
+        with tab6:
             st.info("برای چاپ یا ذخیره PDF گزارشات، از گزینه Print مرورگر (Ctrl+P) استفاده کنید.")
 
     # -------------------------------------------------------------
@@ -407,7 +576,7 @@ else:
                             label=metric, 
                             value=f"{doc_data[metric]}", 
                             delta=f"رتبه {doc_ranks[metric]} از {len(df)}",
-                            delta_color="inverse" if "ویزیت" not in metric and "آزمایشگاه" not in metric else "normal"
+                            delta_color="inverse" if "ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric else "normal"
                         )
 
                 st.markdown("---")
@@ -420,7 +589,7 @@ else:
                         continue
                     avg = avg_data[metric]
                     
-                    if "ویزیت" not in metric and "آزمایشگاه" not in metric:
+                    if "ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric:
                         if avg > 0 and val > avg * 1.2:
                             warnings.append(f"🔴 **نیازمند اصلاح در {metric}:** میزان تجویز شما ({val}) بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
                             critical_metrics.append((metric, val, avg))
