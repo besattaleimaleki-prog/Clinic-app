@@ -157,7 +157,7 @@ def get_clinical_guideline(metric_name, user_val, avg_val):
         )
     else:
         return (
-            f"📖 **توصیه علمی بر اساس پزشکی مبتنی بر شواهد (EBM) رادر شاخص {metric_name}:**\n\n"
+            f"📖 **توصیه علمی بر اساس پزشکی مبتنی بر شواهد (EBM) در شاخص {metric_name}:**\n\n"
             f"میزان تجویز شما در شاخص **{metric_name}** با میانگین استاندارد درمانگاه فاصله دارد."
         )
 
@@ -206,7 +206,8 @@ if not st.session_state.logged_in:
     st.title("🔑 ورود به سیستم ارزیابی نسخ درمانگاه")
     login_type = st.radio("نوع ورود را انتخاب کنید:", ["ورود پزشک 👤", "ورود مدیر / ادمین 🛠️"], horizontal=True)
     st.markdown("---")
-if login_type == "ورود مدیر / ادمین 🛠️":
+    
+    if login_type == "ورود مدیر / ادمین 🛠️":
         st.subheader("ورود مدیر سیستم")
         username = st.text_input("نام کاربری ادمین")
         password = st.text_input("رمز عبور ادمین", type="password")
@@ -219,8 +220,8 @@ if login_type == "ورود مدیر / ادمین 🛠️":
                 st.rerun()
             else:
                 st.error("نام کاربری یا رمز عبور ادمین اشتباه است.")
-            else:
-                st.subheader("ورود اختصاصی پزشک")
+    else:
+        st.subheader("ورود اختصاصی پزشک")
         if st.session_state.df is not None:
             df = st.session_state.df
             doctor_col = df.columns[0]
@@ -253,9 +254,7 @@ if login_type == "ورود مدیر / ادمین 🛠️":
                 else:
                     st.error("رمز عبور اشتباه است.")
 
-
-                    
------------- پنل مدیریت و پزشک ------------------
+# ------------------ پنل مدیریت و پزشک ------------------
 else:
     with st.sidebar:
         st.write(f"👤 **کاربر متصل:** {st.session_state.doctor_name if st.session_state.user_role == 'doctor' else 'مدیر سیستم'}")
@@ -423,13 +422,11 @@ else:
             else:
                 st.warning("⚠️ هنوز هیچ فایل اکسلی برای اقلام دارویی بارگذاری نشده است.")
 
-        # --- تب ۴: دارو به نسخه (جدید) ---
-                            # --- تب ۴: دارو به نسخه / ویزیت ---
+        # --- تب ۴: دارو به نسخه / ویزیت ---
         with tab4:
             st.header("📋 میزان تجویز هر دارو به ازای هر ویزیت پزشک")
             st.markdown("محاسبه نسبت مجموع داروی تجویز شده به تعداد کل ویزیت‌های هر پزشک (**اکسل ۱:** نام پزشک + تعداد ویزیت | **اکسل ۲:** نام پزشک + نام دارو + تعداد تجویزی)")
 
-            # تابع یکسان‌سازی نام پزشکان (تعریف درون‌برنامه‌ای جهت جلوگیری از ارور)
             def clean_doctor_name(text):
                 if pd.isna(text):
                     return ""
