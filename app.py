@@ -7,13 +7,11 @@ import json
 
 st.set_page_config(page_title="سیستم ارزیابی نسخ درمانگاه", layout="wide")
 
-# مسیرهای ذخیره‌سازی دائمی فایل و تنظیمات
 DATA_FILE = "saved_clinic_data.xlsx"
 SETTINGS_FILE = "system_settings.json"
 
 # ------------------ مدیریت ذخیره و بازیابی دائمی داده‌ها ------------------
 def save_settings():
-    """ذخیره رمزها و یادداشت‌های ادمین در فایل JSON"""
     settings = {
         "passwords": st.session_state.doctor_passwords,
         "general_notes": st.session_state.admin_general_notes,
@@ -23,7 +21,6 @@ def save_settings():
         json.dump(settings, f, ensure_ascii=False, indent=4)
 
 def load_settings():
-    """بازیابی رمزها و یادداشت‌های ادمین از فایل JSON"""
     if os.path.exists(SETTINGS_FILE):
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
@@ -33,6 +30,18 @@ def load_settings():
                 st.session_state.admin_doctor_notes = settings.get("doctor_notes", {})
         except Exception:
             pass
+
+def calculate_ranks(df, metrics):
+    """محاسبه ایمن رتبه‌ها با پشتیبانی از خانه‌های خالی و مقادیر متنی"""
+    df_ranks = df.copy()
+    for col in metrics:
+        numeric_col = pd.to_numeric(df[col], errors='coerce')
+        if "ویزیت" in col or "آزمایشگاه" in col:
+            ranks = numeric_col.rank(ascending=False, method='min')
+        else:
+            ranks = numeric_col.rank(ascending=True, method='min')
+        df_ranks[col] = ranks.fillna(0).astype(int)
+    return df_ranks
 
 # ------------------ توابع راهنمای بالینی ------------------
 def get_clinical_guideline(metric_name, user_val, avg_val):
@@ -84,10 +93,8 @@ if 'admin_general_notes' not in st.session_state:
 if 'admin_doctor_notes' not in st.session_state:
     st.session_state.admin_doctor_notes = {}
 
-# فراخوانی تنظیمات ذخیره‌شده از قبل
 load_settings()
 
-# بازیابی فایل اکسل از دیسک در صورت وجود
 if 'df' not in st.session_state or st.session_state.df is None:
     if os.path.exists(DATA_FILE):
         try:
@@ -128,7 +135,7 @@ if not st.session_state.logged_in:
         if st.session_state.df is not None:
             df = st.session_state.df
             doctor_col = df.columns[0]
-            doctors_list = df[doctor_col].tolist()
+            doctors_list = df[doctor_col].dropna().tolist()
             selected_doc = st.selectbox("نام خود را انتخاب کنید:", doctors_list)
         else:
             st.info("ℹ️ اطلاعات درمانگاه هنوز توسط مدیر بارگذاری نشده است. پس از ورود مدیر و آپلود فایل، کارنامه شما فعال خواهد شد.")
@@ -176,23 +183,27 @@ else:
         uploaded_file = st.file_uploader("لطفاً فایل اکسل خروجی سیستم را آپلود کنید", type=["xlsx", "xls"])
         
         if uploaded_file is not None:
-            df_new = pd.read_excel(uploaded_file)
-            st.session_state.df = df_new
-            # ذخیره دائمی فایل آپلودشده روی دیسک
-            df_new.to_excel(DATA_FILE, index=False)
-            st.success("فایل اکسل با موفقیت بارگذاری و به صورت دائمی در سیستم ذخیره شد.")
+            try:
+                df_new = pd.read_excel(uploaded_file)
+            except Exception:
+                try:
+                    uploaded_file.seek(0)
+                    df_new = pd.read_html(uploaded_file)[0]
+                except Exception:
+                    st.error("❌ خطا در خواندن فایل اکسل. لطفاً فرمت فایل را بررسی کنید.")
+                    df_new = None
+
+            if df_new is not None:
+                st.session_state.df = df_new
+                df_new.to_excel(DATA_FILE, index=False)
+                st.success("فایل اکسل با موفقیت بارگذاری و به صورت دائمی در سیستم ذخیره شد.")
 
         if st.session_state.df is not None:
             df = st.session_state.df
             doctor_col = df.columns[0]
             metrics = df.columns[1:]
             
-            df_ranks = df.copy()
-            for col in metrics:
-                if "ویزیت" in col or "آزمایشگاه" in col:
-                    df_ranks[col] = df[col].rank(ascending=False, method='min').astype(int)
-                else:
-                    df_ranks[col] = df[col].rank(ascending=True, method='min').astype(int)
+            df_ranks = calculate_ranks(df, metrics)
 
             tab1, tab2, tab3, tab4 = st.tabs(["📈 مقایسه کل پزشکان", "👤 بررسی فردی پزشکان", "📝 بازخورد و توصیه‌های مدیریت", "💾 خروجی PDF"])
 
@@ -206,7 +217,8 @@ else:
 
             with tab2:
                 st.header("بررسی اختصاصی پزشکان (دسترسی مدیریتی)")
-                selected_doc = st.selectbox("انتخاب پزشک جهت بررسی:", df[doctor_col].tolist())
+                doctors_list = df[doctor_col].dropna().tolist()
+                selected_doc = st.selectbox("انتخاب پزشک جهت بررسی:", doctors_list)
                 doc_data = df[df[doctor_col] == selected_doc].iloc[0]
                 doc_ranks = df_ranks[df_ranks[doctor_col] == selected_doc].iloc[0]
                 
@@ -229,7 +241,8 @@ else:
                 st.markdown("---")
 
                 st.subheader("✉️ توصیه و بازخورد اختصاصی به یک پزشک مشخص")
-                selected_target_doc = st.selectbox("پزشک مورد نظر را انتخاب کنید:", df[doctor_col].tolist(), key="admin_target_doc")
+                doctors_list = df[doctor_col].dropna().tolist()
+                selected_target_doc = st.selectbox("پزشک مورد نظر را انتخاب کنید:", doctors_list, key="admin_target_doc")
                 current_doc_note = st.session_state.admin_doctor_notes.get(selected_target_doc, "")
                 spec_note = st.text_area(f"متن توصیه اختصاصی برای {selected_target_doc}:", value=current_doc_note, height=120)
                 if st.button(f"ذخیره توصیه اختصاصی برای {selected_target_doc}", type="primary"):
@@ -250,7 +263,6 @@ else:
         current_doc = st.session_state.doctor_name
         st.title(f"👨‍⚕️ پنل اختصاصی ارتقای عملکرد: {current_doc}")
 
-        # ------------------ نمایش پیام‌ها و توصیه‌های ادمین/مدیریت ------------------
         has_gen_note = bool(st.session_state.get('admin_general_notes', '').strip())
         has_doc_note = bool(st.session_state.get('admin_doctor_notes', {}).get(current_doc, '').strip())
 
@@ -273,14 +285,12 @@ else:
                 st.error(f"❌ نام شما ({current_doc}) در فایل اکسل بارگذاری‌شده پیدا نشد. لطفاً با مدیر سیستم تماس بگیرید.")
             else:
                 doc_data = df[df[doctor_col] == current_doc].iloc[0]
-                avg_data = df[metrics].mean()
                 
-                df_ranks = df.copy()
-                for col in metrics:
-                    if "ویزیت" in col or "آزمایشگاه" in col:
-                        df_ranks[col] = df[col].rank(ascending=False, method='min').astype(int)
-                    else:
-                        df_ranks[col] = df[col].rank(ascending=True, method='min').astype(int)
+                # محاسبه میانگین فقط روی مقادیر عددی معتبر
+                numeric_df = df[metrics].apply(pd.to_numeric, errors='coerce')
+                avg_data = numeric_df.mean()
+                
+                df_ranks = calculate_ranks(df, metrics)
                 doc_ranks = df_ranks[df_ranks[doctor_col] == current_doc].iloc[0]
 
                 st.markdown("این گزارش جهت بررسی عملکرد شخص شما، مقایسه با استاندارد درمانگاه و ارائه توصیه‌های علمی تنظیم شده است.")
@@ -298,25 +308,28 @@ else:
 
                 st.markdown("---")
 
-                # ------------------ تحلیل هوشمند و هشدارهای تجویزی ------------------
                 st.subheader("⚠️ تحلیل هوشمند وضعیت تجویزی شما")
                 warnings, goods = [], []
                 critical_metrics = []
 
                 for metric in metrics:
-                    val = doc_data[metric]
+                    val = pd.to_numeric(doc_data[metric], errors='coerce')
+
+                    if pd.isna(val):
+                        continue
+
                     avg = avg_data[metric]
                     
                     if "ویزیت" not in metric and "آزمایشگاه" not in metric:
-                        if val > avg * 1.2:
+                        if avg > 0 and val > avg * 1.2:
                             warnings.append(f"🔴 **نیازمند اصلاح در {metric}:** میزان تجویز شما ({val}) بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
                             critical_metrics.append((metric, val, avg))
-                        elif val > avg:
+                        elif avg > 0 and val > avg:
                             warnings.append(f"🟡 **هشدار در {metric}:** تجویز شما ({val}) کمی بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
                         else:
                             goods.append(f"🟢 **عملکرد مطلوب در {metric}:** تجویز شما ({val}) مناسب و در محدوده استانداردهای درمانگاه است.")
                     else:
-                        if val < avg * 0.8:
+                        if avg > 0 and val < avg * 0.8:
                             warnings.append(f"🟡 **توجه در {metric}:** آمار شما ({val}) پایین‌تر از میانگین درمانگاه ({round(avg, 1)}) است.")
                         else:
                             goods.append(f"🟢 **وضعیت مناسب در {metric}:** آمار شما در سطح مطلوب قرار دارد.")
@@ -332,7 +345,6 @@ else:
 
                 st.markdown("---")
 
-                # ------------------ بخش توصیه‌ها و گایدلاین‌های علمی (WHO / CDC) ------------------
                 st.subheader("💡 توصیه‌ها و گایدلاین‌های بالینی روز دنیا (WHO / CDC) برای ارتقای عملکرد")
                 
                 if critical_metrics:
@@ -346,11 +358,11 @@ else:
 
                 st.markdown("---")
 
-                # ------------------ نمودارهای مقایسه‌ای ------------------
                 st.subheader("📊 مقایسه عملکرد شما با میانگین کل درمانگاه")
+                doc_vals = [pd.to_numeric(doc_data[m], errors='coerce') for m in metrics]
                 comp_df = pd.DataFrame({
                     'شاخص': list(metrics) * 2,
-                    'مقدار': list(doc_data[metrics].values) + list(avg_data.values),
+                    'مقدار': doc_vals + list(avg_data.values),
                     'مرجع': ['عملکرد شما'] * len(metrics) + ['میانگین درمانگاه'] * len(metrics)
                 })
 
@@ -368,7 +380,15 @@ else:
                 st.plotly_chart(fig_compare, use_container_width=True)
 
                 st.subheader("🎯 درصد انحراف شما از میانگین درمانگاه")
-                pct_diff = [((doc_data[m] - avg_data[m]) / avg_data[m]) * 100 if avg_data[m] != 0 else 0 for m in metrics]
+                pct_diff = []
+                for m in metrics:
+                    v = pd.to_numeric(doc_data[m], errors='coerce')
+                    a = avg_data[m]
+                    if pd.notna(v) and pd.notna(a) and a != 0:
+                        pct_diff.append(((v - a) / a) * 100)
+                    else:
+                        pct_diff.append(0)
+
                 diff_df = pd.DataFrame({'شاخص': metrics, 'درصد انحراف': pct_diff})
                 diff_df['وضعیت'] = diff_df['درصد انحراف'].apply(lambda x: 'بالاتر از میانگین' if x > 0 else 'پایین‌تر از میانگین')
 
@@ -386,7 +406,6 @@ else:
                 st.plotly_chart(fig_diff, use_container_width=True)
 
         st.markdown("---")
-        # ------------------ بخش تغییر رمز عبور پزشک ------------------
         with st.expander("🔑 تغییر رمز عبور حساب کاربری"):
             st.write("در صورت تمایل می‌توانید رمز عبور ورود خود را تغییر دهید:")
             old_pass = st.text_input("رمز عبور فعلی:", type="password")
