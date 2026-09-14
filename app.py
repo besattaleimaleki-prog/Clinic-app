@@ -573,32 +573,46 @@ else:
         current_doc = st.session_state.doctor_name
         st.title(f"👨‍⚕️ پنل اختصاصی ارتقای عملکرد: {current_doc}")
 
+        # بازیابی یادداشت اختصاصی هوشمند
+        doc_notes_dict = st.session_state.get('admin_doctor_notes', {})
+        doc_note_content = doc_notes_dict.get(current_doc, "")
+        if not doc_note_content:
+            for k, v in doc_notes_dict.items():
+                if clean_username(k) == current_doc:
+                    doc_note_content = v
+                    break
+
         has_gen_note = bool(st.session_state.get('admin_general_notes', '').strip())
-        has_doc_note = bool(st.session_state.get('admin_doctor_notes', {}).get(current_doc, '').strip())
+        has_doc_note = bool(doc_note_content.strip())
 
         if has_gen_note or has_doc_note:
             st.subheader("📮 پیام‌ها و توصیه‌های مدیریت درمانگاه")
             if has_gen_note:
                 st.info(f"**📢 اطلاعیه عمومی مدیریت:**\n\n{st.session_state.admin_general_notes}")
             if has_doc_note:
-                st.warning(f"**✉️ توصیه اختصاصی مدیریت برای شما ({current_doc}):**\n\n{st.session_state.admin_doctor_notes[current_doc]}")
+                st.warning(f"**✉️ توصیه اختصاصی مدیریت برای شما ({current_doc}):**\n\n{doc_note_content}")
             st.markdown("---")
 
         if st.session_state.df is None:
             st.warning("⚠️ اطلاعات درمانگاه هنوز توسط مدیر بارگذاری نشده است.")
         else:
-            df = st.session_state.df
+            df = st.session_state.df.copy()
             doctor_col = df.columns[0]
             metrics = df.columns[1:]
 
-            if current_doc not in df[doctor_col].values:
+            # پاکسازی و تطبیق اسامی داخل فایل اکسل
+            df['doc_clean'] = df[doctor_col].apply(clean_username)
+
+            if current_doc not in df['doc_clean'].values:
                 st.error(f"❌ نام شما ({current_doc}) در فایل اکسل پیدا نشد.")
             else:
-                doc_data = df[df[doctor_col] == current_doc].iloc[0]
+                doc_data = df[df['doc_clean'] == current_doc].iloc[0]
                 numeric_df = df[metrics].apply(pd.to_numeric, errors='coerce')
                 avg_data = numeric_df.mean()
+                
                 df_ranks = calculate_ranks(df, metrics)
-                doc_ranks = df_ranks[df_ranks[doctor_col] == current_doc].iloc[0]
+                df_ranks['doc_clean'] = df_ranks[doctor_col].apply(clean_username)
+                doc_ranks = df_ranks[df_ranks['doc_clean'] == current_doc].iloc[0]
 
                 st.subheader("📋 خلاصه آمار و رتبه شما در درمانگاه")
                 cols = st.columns(2)
