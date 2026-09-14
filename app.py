@@ -403,10 +403,19 @@ else:
                 st.warning("⚠️ هنوز هیچ فایل اکسلی برای اقلام دارویی بارگذاری نشده است.")
 
         # --- تب ۴: دارو به نسخه (جدید) ---
-                        # --- تب ۴: دارو به نسخه / ویزیت (کد اصلاح‌شده کامل) ---
+                            # --- تب ۴: دارو به نسخه / ویزیت ---
         with tab4:
             st.header("📋 میزان تجویز هر دارو به ازای هر ویزیت پزشک")
             st.markdown("محاسبه نسبت مجموع داروی تجویز شده به تعداد کل ویزیت‌های هر پزشک (**اکسل ۱:** نام پزشک + تعداد ویزیت | **اکسل ۲:** نام پزشک + نام دارو + تعداد تجویزی)")
+
+            # تابع یکسان‌سازی نام پزشکان (تعریف درون‌برنامه‌ای جهت جلوگیری از ارور)
+            def clean_doctor_name(text):
+                if pd.isna(text):
+                    return ""
+                text = str(text).strip()
+                text = text.replace('ي', 'ی').replace('ك', 'ک')
+                text = text.replace('دکتر', '').replace('پزشک', '')
+                return " ".join(text.split())
 
             if st.session_state.df is None or st.session_state.df_drugs is None:
                 st.error("⚠️ لطفا ابتدا هر دو فایل اکسل (شاخص‌های کل و اقلام دارویی) را بارگذاری کنید.")
@@ -431,7 +440,6 @@ else:
                 drug_name_col = df_drugs.columns[1]
                 drug_qty_col = df_drugs.columns[2]
 
-                # استانداردسازی مقادیر و نام داروها
                 df_drugs[drug_qty_col] = pd.to_numeric(df_drugs[drug_qty_col], errors='coerce').fillna(0)
                 df_drugs[drug_name_col] = df_drugs[drug_name_col].astype(str).str.strip()
 
@@ -453,16 +461,15 @@ else:
                             # الف) استخراج تعداد داروی انتخابی از اکسل دوم
                             df_selected_drug = df_drugs[df_drugs[drug_name_col] == selected_drug].copy()
                             
-                            # پاکسازی نام پزشکان در هر دو فریم داده
                             df_selected_drug['doc_clean'] = df_selected_drug[doc_col_drug].apply(clean_doctor_name)
                             doc_drug_qty = df_selected_drug.groupby('doc_clean')[drug_qty_col].sum().reset_index()
 
-                            # ب) استخراج تعداد ویزیت از اکسل اول و پاکسازی نام
+                            # ب) استخراج تعداد ویزیت از اکسل اول
                             doc_visits = df_main[[doc_col_main, visit_col]].copy()
                             doc_visits[visit_col] = pd.to_numeric(doc_visits[visit_col], errors='coerce').fillna(0)
                             doc_visits['doc_clean'] = doc_visits[doc_col_main].apply(clean_doctor_name)
 
-                            # ج) ادغام کامل بر اساس کل پزشکان اکسل اول (how='left')
+                            # ج) ادغام داده‌ها
                             merged_data = pd.merge(
                                 doc_visits, 
                                 doc_drug_qty, 
@@ -470,12 +477,9 @@ else:
                                 how='left'
                             )
 
-                            # مقداردهی صفر برای پزشکانی که این دارو را تجویز نکرده‌اند
                             merged_data[drug_qty_col] = merged_data[drug_qty_col].fillna(0)
 
-                            # گزینه برای فیلتر کردن پزشکانی که این دارو را اصلاً تجویز نکرده‌اند
                             show_zeros = st.checkbox("نمایش پزشکان با تجویز صفر برای این دارو", value=True)
-                            
                             if not show_zeros:
                                 merged_data = merged_data[merged_data[drug_qty_col] > 0]
 
@@ -484,7 +488,6 @@ else:
                             if merged_data.empty:
                                 st.warning("اطلاعاتی برای نمایش پیدا نشد.")
                             else:
-                                # د) محاسبه نسبت: (تعداد تجویز) / (تعداد ویزیت)
                                 merged_data['میزان_در_هر_ویزیت'] = merged_data[drug_qty_col] / merged_data[visit_col]
                                 merged_data['برچسب'] = merged_data.apply(
                                     lambda r: f"{r['میزان_در_هر_ویزیت']:.2f} (کل: {int(r[drug_qty_col]):,} از {int(r[visit_col]):,} ویزیت)", 
@@ -514,7 +517,6 @@ else:
                                 )
                                 st.plotly_chart(fig_bar, use_container_width=True)
 
-                                # ه) جدول جزئیات
                                 st.subheader("📋 جدول جزئیات محاسبات")
                                 table_df = merged_data[[doc_col_main, drug_qty_col, visit_col, 'میزان_در_هر_ویزیت']].copy()
                                 table_df.columns = ['نام پزشک', 'کل داروی تجویز شده', 'تعداد کل ویزیت‌ها', 'میزان به ازای هر ویزیت']
