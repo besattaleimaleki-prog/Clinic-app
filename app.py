@@ -206,8 +206,7 @@ if not st.session_state.logged_in:
     st.title("🔑 ورود به سیستم ارزیابی نسخ درمانگاه")
     login_type = st.radio("نوع ورود را انتخاب کنید:", ["ورود پزشک 👤", "ورود مدیر / ادمین 🛠️"], horizontal=True)
     st.markdown("---")
-    
-# -----    if login_type == "ورود مدیر / ادمین 🛠️":
+        if login_type == "ورود مدیر / ادمین 🛠️":
         st.subheader("ورود مدیر سیستم")
         username = st.text_input("نام کاربری ادمین")
         password = st.text_input("رمز عبور ادمین", type="password")
@@ -235,13 +234,11 @@ if not st.session_state.logged_in:
         
         if st.button("ورود به پنل پزشک", type="primary"):
             raw_target_doc = selected_doc.strip() if selected_doc else ""
-            # پاکسازی پیشوندها (دکتر، خانم، آقا و ...) از نام پزشک
             target_doc = clean_username(selected_doc)
             
             if not target_doc:
                 st.error("لطفاً نام خود را مشخص کنید.")
             else:
-                # بررسی رمز عبور (پشتیبانی هم از نام با پیشوند و هم بدون پیشوند)
                 expected_password = st.session_state.doctor_passwords.get(
                     target_doc, 
                     st.session_state.doctor_passwords.get(raw_target_doc, DOCTOR_DEFAULT_PASSWORD)
@@ -250,11 +247,13 @@ if not st.session_state.logged_in:
                 if doc_password == expected_password:
                     st.session_state.logged_in = True
                     st.session_state.user_role = "doctor"
-                    st.session_state.doctor_name = target_doc  # ذخیره نام پاکسازی‌شده
+                    st.session_state.doctor_name = target_doc
                     st.success(f"خوش آمدید {target_doc}")
                     st.rerun()
                 else:
                     st.error("رمز عبور اشتباه است.")
+
+
                     
 ------------ پنل مدیریت و پزشک ------------------
 else:
