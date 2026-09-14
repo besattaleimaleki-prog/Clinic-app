@@ -85,7 +85,9 @@ def classify_drug(drug_name):
     """تحلیل و دسته‌بندی هوشمند دارو بر اساس نام و شکل دارویی"""
     name_lower = str(drug_name).strip().lower()
     
-    is_oint = any(k in name_lower for k in ['oint', 'ointment', 'پماد'])
+    # شناسایی موارد موضعی، ژل و قطره جهت استثنا کردن از فیلترهای تخصصی
+    exclude_keywords = ['oint', 'ointment', 'پماد', 'gel', 'ژل', 'drop', 'drops', 'قطره']
+    is_excluded_form = any(k in name_lower for k in exclude_keywords)
     
     oral_prefixes = ['tab', 'cap', 'syru', 'susp', 'syrup', 'قرص', 'کپسول', 'شربت', 'ساسپنشن']
     is_oral = any(name_lower.startswith(p) or f" {p}" in name_lower for p in oral_prefixes)
@@ -104,7 +106,7 @@ def classify_drug(drug_name):
         'ceftriaxone', 'cefazolin', 'clinda', 'clindamycin', 'meropenem', 'imipenem',
         'nitrofurantoin'
     ]
-    is_abx = (not is_oint) and any(k in name_lower for k in abx_keywords)
+    is_abx = (not is_excluded_form) and any(k in name_lower for k in abx_keywords)
     
     nsaid_keywords = [
         'ibuprofen', 'gelofen', 'indomethacin', 'diclofenac', 'naproxen',
@@ -112,7 +114,7 @@ def classify_drug(drug_name):
         'ketorolac', 'ketoprofen', 'flurbiprofen', 'tenoxicam', 'nimesulide',
         'پروفن', 'ژلوفن', 'دیکلوفناک', 'ناپروکسن', 'مفنامیک'
     ]
-    is_nsaid = (not is_oint) and any(k in name_lower for k in nsaid_keywords)
+    is_nsaid = (not is_excluded_form) and any(k in name_lower for k in nsaid_keywords)
     
     cortico_keywords = [
         'dexa', 'dexamethasone', 'beta', 'betamethasone', 'hydrocortisone',
@@ -120,7 +122,7 @@ def classify_drug(drug_name):
         'budesonide', 'fluticasone', 'clobetasol', 'mometasone', 'cortison',
         'دگزا', 'بتامتازون', 'هیدروکورتیزون', 'پرنیزولون', 'تریامسینولون'
     ]
-    is_cortico = (not is_oint) and any(k in name_lower for k in cortico_keywords)
+    is_cortico = (not is_excluded_form) and any(k in name_lower for k in cortico_keywords)
     
     return {
         "oral": is_oral,
@@ -143,11 +145,13 @@ def filter_drug_list(drugs_list, category):
             result.append(d)
         elif category == "فقط تزریقی (Inj)" and info["inj_strict"]:
             result.append(d)
-        elif category == "آنتی‌بیوتیک‌ها (بدون Ointment)" and info["abx"]:
+        elif category in ["آنتی‌بیوتیک‌ها (بدون Oint, Gel, Drop)", "مجموع آنتی‌بیوتیک‌ها"] and info["abx"]:
             result.append(d)
-        elif category == "مسکن‌های NSAID (بدون Ointment)" and info["nsaid"]:
+        elif category in ["مسکن‌های NSAID (بدون Oint, Gel, Drop)", "مجموع NSAIDها"] and info["nsaid"]:
             result.append(d)
-        elif category == "کورتیکواستروئیدها (بدون Ointment)" and info["cortico"]:
+        elif category in ["کورتیکواستروئیدها (بدون Oint, Gel, Drop)", "مجموع کورتیکواستروئیدها"] and info["cortico"]:
+            result.append(d)
+        elif category == "مجموع تزریقی‌ها" and info["inj_gen"]:
             result.append(d)
     return result
 
@@ -284,6 +288,21 @@ else:
             st.session_state.doctor_name = None
             st.rerun()
 
+    # گزینه های کامل فیلترهای دارویی
+    filter_options = [
+        "همه اشکال", 
+        "خوراکی (Tab, Cap, Syru, Susp)", 
+        "تزریقی عمومی (Inj, Infusion, Solution)",
+        "فقط تزریقی (Inj)",
+        "آنتی‌بیوتیک‌ها (بدون Oint, Gel, Drop)",
+        "مسکن‌های NSAID (بدون Oint, Gel, Drop)",
+        "کورتیکواستروئیدها (بدون Oint, Gel, Drop)",
+        "مجموع آنتی‌بیوتیک‌ها",
+        "مجموع تزریقی‌ها",
+        "مجموع کورتیکواستروئیدها",
+        "مجموع NSAIDها"
+    ]
+
     # -------------------------------------------------------------
     # ۱. بخش دسترسی مدیر (ADMIN)
     # -------------------------------------------------------------
@@ -354,16 +373,6 @@ else:
                     with cols[i % 2]:
                         st.metric(label=metric, value=f"{doc_data[metric]}", delta=f"رتبه {doc_ranks[metric]} از {len(df)}")
 
-        filter_options = [
-            "همه اشکال", 
-            "خوراکی (Tab, Cap, Syru, Susp)", 
-            "تزریقی عمومی (Inj, Infusion, Solution)",
-            "فقط تزریقی (Inj)",
-            "آنتی‌بیوتیک‌ها (بدون Ointment)",
-            "مسکن‌های NSAID (بدون Ointment)",
-            "کورتیکواستروئیدها (بدون Ointment)"
-        ]
-
         # --- تب ۳: درصد دارو به پزشک ---
         with tab3:
             st.header("💊 سهم و درصد تجویز داروها به تفکیک پزشک")
@@ -406,15 +415,26 @@ else:
                     st.warning("هیچ دارویی با مجموع تجویز بیشتر از صفر یافت نشد.")
                 else:
                     form_filter = st.radio("🔍 انتخاب فیلتر دسته‌بندی دارویی:", filter_options, horizontal=True, key="filter_tab3")
+                    is_total_mode = form_filter in ["مجموع آنتی‌بیوتیک‌ها", "مجموع تزریقی‌ها", "مجموع کورتیکواستروئیدها", "مجموع NSAIDها"]
+                    
                     selectable_drugs = filter_drug_list(valid_drugs, form_filter)
 
                     if not selectable_drugs:
                         st.info("دارویی در دسته انتخابی یافت نشد.")
                     else:
-                        selected_drug = st.selectbox("🔍 داروی مورد نظر را انتخاب یا سرچ کنید:", selectable_drugs, key="select_drug_tab3")
+                        if is_total_mode:
+                            st.info(f"💡 **حالت تجمعی فعال است:** مجموع کل {len(selectable_drugs)} قلم داروی شناسایی‌شده در دسته «{form_filter}» محاسبه شد.")
+                            drug_df = df_filtered[df_filtered[drug_c].isin(selectable_drugs)]
+                            target_title = form_filter
+                        else:
+                            selected_drug = st.selectbox("🔍 داروی مورد نظر را انتخاب یا سرچ کنید:", selectable_drugs, key="select_drug_tab3")
+                            if selected_drug:
+                                drug_df = df_filtered[df_filtered[drug_c] == selected_drug]
+                                target_title = selected_drug
+                            else:
+                                drug_df = None
 
-                        if selected_drug:
-                            drug_df = df_filtered[df_filtered[drug_c] == selected_drug]
+                        if drug_df is not None and not drug_df.empty:
                             doc_grouped = drug_df.groupby(doc_c)[qty_c].sum().reset_index()
                             doc_grouped = doc_grouped[doc_grouped[qty_c] > 0]
                             
@@ -423,7 +443,7 @@ else:
                             doc_grouped['برچسب_نمودار'] = doc_grouped.apply(lambda r: f"{int(r[qty_c])} عدد ({r['درصد']:.1f}%)", axis=1)
 
                             st.markdown("---")
-                            st.subheader(f"📊 سهم تجویز داروی: `{selected_drug}`")
+                            st.subheader(f"📊 سهم تجویز: `{target_title}`")
 
                             fig_drug = px.bar(
                                 doc_grouped,
@@ -433,14 +453,14 @@ else:
                                 labels={doc_c: 'نام پزشک', qty_c: 'فراوانی تجویز (تعداد)'},
                                 color=qty_c,
                                 color_continuous_scale='Blues',
-                                title=f"توزیع درصد و تعداد تجویز {selected_drug} بین پزشکان"
+                                title=f"توزیع درصد و تعداد تجویز {target_title} بین پزشکان"
                             )
                             fig_drug.update_traces(textposition='outside')
                             fig_drug.update_layout(yaxis_title="تعداد تجویزی", xaxis_title="نام پزشک")
                             st.plotly_chart(fig_drug, use_container_width=True)
 
                             st.metric(
-                                label=f"📦 مجموع کل تعداد تجویزی داروی {selected_drug} در درمانگاه",
+                                label=f"📦 مجموع کل تعداد تجویزی {target_title} در درمانگاه",
                                 value=f"{int(total_drug_qty):,} عدد"
                             )
             else:
@@ -482,15 +502,26 @@ else:
                     st.warning("هیچ دارویی با مجموع تجویز بیشتر از صفر در اکسل دوم یافت نشد.")
                 else:
                     form_filter = st.radio("🔍 فیلتر دسته‌بندی دارویی:", filter_options, horizontal=True, key="filter_tab_rx")
+                    is_total_mode = form_filter in ["مجموع آنتی‌بیوتیک‌ها", "مجموع تزریقی‌ها", "مجموع کورتیکواستروئیدها", "مجموع NSAIDها"]
+
                     selectable_drugs = filter_drug_list(valid_drugs, form_filter)
 
                     if not selectable_drugs:
                         st.info("دارویی در دسته انتخابی یافت نشد.")
                     else:
-                        selected_drug = st.selectbox("🔍 انتخاب دارو:", selectable_drugs, key="select_drug_tab_rx")
+                        if is_total_mode:
+                            st.info(f"💡 **حالت تجمعی فعال است:** مجموع کل {len(selectable_drugs)} قلم داروی شناسایی‌شده در دسته «{form_filter}» محاسبه شد.")
+                            df_selected_drug = df_drugs[df_drugs[drug_name_col].isin(selectable_drugs)].copy()
+                            target_title = form_filter
+                        else:
+                            selected_drug = st.selectbox("🔍 انتخاب دارو:", selectable_drugs, key="select_drug_tab_rx")
+                            if selected_drug:
+                                df_selected_drug = df_drugs[df_drugs[drug_name_col] == selected_drug].copy()
+                                target_title = selected_drug
+                            else:
+                                df_selected_drug = None
 
-                        if selected_drug:
-                            df_selected_drug = df_drugs[df_drugs[drug_name_col] == selected_drug].copy()
+                        if df_selected_drug is not None and not df_selected_drug.empty:
                             df_selected_drug['doc_clean'] = df_selected_drug[doc_col_drug].apply(clean_name)
                             doc_drug_qty = df_selected_drug.groupby('doc_clean')[drug_qty_col].sum().reset_index()
 
@@ -501,7 +532,7 @@ else:
                             merged_data = pd.merge(doc_visits, doc_drug_qty, on='doc_clean', how='left')
                             merged_data[drug_qty_col] = merged_data[drug_qty_col].fillna(0)
 
-                            show_zeros = st.checkbox("نمایش پزشکان با تجویز صفر برای این دارو", value=True)
+                            show_zeros = st.checkbox("نمایش پزشکان با تجویز صفر برای این گروه/دارو", value=True)
                             if not show_zeros:
                                 merged_data = merged_data[merged_data[drug_qty_col] > 0]
 
@@ -517,7 +548,7 @@ else:
                                 )
 
                                 st.markdown("---")
-                                st.subheader(f"📊 نمودار تجویز داروی `{selected_drug}` به ازای هر ویزیت")
+                                st.subheader(f"📊 نمودار تجویز `{target_title}` به ازای هر ویزیت")
 
                                 fig_bar = px.bar(
                                     merged_data,
@@ -530,7 +561,7 @@ else:
                                     },
                                     color='میزان_در_هر_ویزیت',
                                     color_continuous_scale='Tealgrn',
-                                    title=f"میزان تجویز {selected_drug} به ازای هر ویزیت پزشک"
+                                    title=f"میزان تجویز {target_title} به ازای هر ویزیت پزشک"
                                 )
                                 fig_bar.update_traces(textposition='outside')
                                 fig_bar.update_layout(
