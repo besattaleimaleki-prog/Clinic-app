@@ -30,7 +30,8 @@ def save_settings():
     settings = {
         "passwords": st.session_state.doctor_passwords,
         "general_notes": st.session_state.admin_general_notes,
-        "doctor_notes": st.session_state.admin_doctor_notes
+        "doctor_notes": st.session_state.admin_doctor_notes,
+        "metric_settings": st.session_state.get("metric_settings", {})
     }
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(settings, f, ensure_ascii=False, indent=4)
@@ -43,17 +44,29 @@ def load_settings():
                 st.session_state.doctor_passwords = settings.get("passwords", {})
                 st.session_state.admin_general_notes = settings.get("general_notes", "")
                 st.session_state.admin_doctor_notes = settings.get("doctor_notes", {})
+                st.session_state.metric_settings = settings.get("metric_settings", {})
         except Exception:
             pass
 
 def calculate_ranks(df, metrics):
     df_ranks = df.copy()
+    metric_settings = st.session_state.get("metric_settings", {})
     for col in metrics:
         numeric_col = pd.to_numeric(df[col], errors='coerce')
-        if "ویزیت" in col or "آزمایشگاه" in col or "نسخ" in col:
-            ranks = numeric_col.rank(ascending=False, method='min')
+        m_set = metric_settings.get(col, {})
+        direction = m_set.get("direction", "")
+        
+        if direction == "بیشتر بهتر":
+            ascending = False
+        elif direction == "کمتر بهتر":
+            ascending = True
         else:
-            ranks = numeric_col.rank(ascending=True, method='min')
+            if "ویزیت" in col or "آزمایشگاه" in col or "نسخ" in col:
+                ascending = False
+            else:
+                ascending = True
+                
+        ranks = numeric_col.rank(ascending=ascending, method='min')
         df_ranks[col] = ranks.fillna(0).astype(int)
     return df_ranks
 
@@ -174,6 +187,8 @@ if 'admin_general_notes' not in st.session_state:
     st.session_state.admin_general_notes = ""
 if 'admin_doctor_notes' not in st.session_state:
     st.session_state.admin_doctor_notes = {}
+if 'metric_settings' not in st.session_state:
+    st.session_state.metric_settings = {}
 
 load_settings()
 
@@ -271,11 +286,12 @@ else:
     if st.session_state.user_role == "admin":
         st.title("🛠️ پنل مدیریت و ارزیابی کل درمانگاه")
 
-        tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
             "📈 مقایسه کل پزشکان", 
             "👤 بررسی فردی پزشکان", 
             "💊 درصد دارو به پزشک", 
             "📋 دارو به نسخه",
+            "⚙️ تنظیمات سطوح شاخص‌ها",
             "📝 بازخورد و توصیه‌های مدیریت", 
             "💾 خروجی PDF"
         ])
@@ -476,18 +492,15 @@ else:
                         selected_drug = st.selectbox("🔍 انتخاب دارو:", selectable_drugs, key="select_drug_tab_rx")
 
                         if selected_drug:
-                            # الف) استخراج تعداد داروی انتخابی از اکسل دوم
                             df_selected_drug = df_drugs[df_drugs[drug_name_col] == selected_drug].copy()
                             
                             df_selected_drug['doc_clean'] = df_selected_drug[doc_col_drug].apply(clean_doctor_name)
                             doc_drug_qty = df_selected_drug.groupby('doc_clean')[drug_qty_col].sum().reset_index()
 
-                            # ب) استخراج تعداد ویزیت از اکسل اول
                             doc_visits = df_main[[doc_col_main, visit_col]].copy()
                             doc_visits[visit_col] = pd.to_numeric(doc_visits[visit_col], errors='coerce').fillna(0)
                             doc_visits['doc_clean'] = doc_visits[doc_col_main].apply(clean_doctor_name)
 
-                            # ج) ادغام داده‌ها
                             merged_data = pd.merge(
                                 doc_visits, 
                                 doc_drug_qty, 
@@ -541,8 +554,74 @@ else:
                                 table_df['میزان به ازای هر ویزیت'] = table_df['میزان به ازای هر ویزیت'].round(2)
                                 st.dataframe(table_df.set_index('نام پزشک'), use_container_width=True)
 
-        # --- تب ۵: بازخوردها ---
+        # --- تب ۵: تنظیمات سطوح شاخص‌ها ---
         with tab5:
+            st.header("⚙️ تنظیمات سطوح و حدود استاندارد شاخص‌ها")
+            st.markdown("در این بخش می‌توانید برای هر شاخص، **حد ایده‌آل**، **حد استاندارد**، **حد بحرانی** و **جهت مطلوبیت** را تعیین کنید.")
+
+            if st.session_state.df is not None:
+                df_curr = st.session_state.df
+                metrics_list = df_curr.columns[1:].tolist()
+
+                with st.form("metric_settings_form"):
+                    updated_settings = {}
+                    for metric in metrics_list:
+                        st.subheader(f"📊 شاخص: `{metric}`")
+                        m_curr = st.session_state.metric_settings.get(metric, {})
+
+                        col_dir, col_ideal, col_std, col_crit = st.columns(4)
+
+                        default_dir = m_curr.get("direction", "کمتر بهتر" if ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric) else "بیشتر بهتر")
+                        dir_opts = ["کمتر بهتر", "بیشتر بهتر"]
+                        dir_idx = dir_opts.index(default_dir) if default_dir in dir_opts else 0
+
+                        with col_dir:
+                            direction = st.radio(
+                                f"جهت مطلوبیت",
+                                dir_opts,
+                                index=dir_idx,
+                                key=f"dir_{metric}"
+                            )
+
+                        with col_ideal:
+                            ideal_val = st.number_input(
+                                f"🌟 حد ایده‌آل",
+                                value=float(m_curr.get("ideal", 0.0)),
+                                key=f"ideal_{metric}"
+                            )
+
+                        with col_std:
+                            std_val = st.number_input(
+                                f"✅ حد استاندارد",
+                                value=float(m_curr.get("standard", 0.0)),
+                                key=f"std_{metric}"
+                            )
+
+                        with col_crit:
+                            crit_val = st.number_input(
+                                f"🛑 حد بحرانی",
+                                value=float(m_curr.get("crit", 0.0)),
+                                key=f"crit_{metric}"
+                            )
+
+                        updated_settings[metric] = {
+                            "direction": direction,
+                            "ideal": ideal_val,
+                            "standard": std_val,
+                            "crit": crit_val
+                        }
+                        st.markdown("---")
+
+                    submitted = st.form_submit_button("💾 ذخیره تنظیمات شاخص‌ها", type="primary")
+                    if submitted:
+                        st.session_state.metric_settings = updated_settings
+                        save_settings()
+                        st.success("تنظیمات حدود و سطوح شاخص‌ها با موفقیت ذخیره شد.")
+            else:
+                st.warning("⚠️ هنوز فایل اکسل شاخص‌ها بارگذاری نشده است. لطفاً ابتدا در تب ۱ فایل را آپلود کنید.")
+
+        # --- تب ۶: بازخوردها ---
+        with tab6:
             st.header("📝 مدیریت توصیه‌ها و بازخوردهای مدیریت")
             gen_note = st.text_area("متن پیام عمومی مدیریت:", value=st.session_state.admin_general_notes, height=100)
             if st.button("ذخیره پیام عمومی", type="primary"):
@@ -562,8 +641,8 @@ else:
                     save_settings()
                     st.success("توصیه اختصاصی ذخیره شد.")
 
-        # --- تب ۶: PDF ---
-        with tab6:
+        # --- تب ۷: PDF ---
+        with tab7:
             st.info("برای چاپ یا ذخیره PDF گزارشات، از گزینه Print مرورگر (Ctrl+P) استفاده کنید.")
 
     # -------------------------------------------------------------
@@ -573,7 +652,6 @@ else:
         current_doc = st.session_state.doctor_name
         st.title(f"👨‍⚕️ پنل اختصاصی ارتقای عملکرد: {current_doc}")
 
-        # بازیابی یادداشت اختصاصی هوشمند
         doc_notes_dict = st.session_state.get('admin_doctor_notes', {})
         doc_note_content = doc_notes_dict.get(current_doc, "")
         if not doc_note_content:
@@ -600,7 +678,6 @@ else:
             doctor_col = df.columns[0]
             metrics = df.columns[1:]
 
-            # پاکسازی و تطبیق اسامی داخل فایل اکسل
             df['doc_clean'] = df[doctor_col].apply(clean_username)
 
             if current_doc not in df['doc_clean'].values:
@@ -616,13 +693,23 @@ else:
 
                 st.subheader("📋 خلاصه آمار و رتبه شما در درمانگاه")
                 cols = st.columns(2)
+                metric_settings = st.session_state.get("metric_settings", {})
+
                 for i, metric in enumerate(metrics):
+                    m_dir = metric_settings.get(metric, {}).get("direction", "")
+                    if m_dir == "بیشتر بهتر":
+                        is_inverse = False
+                    elif m_dir == "کمتر بهتر":
+                        is_inverse = True
+                    else:
+                        is_inverse = ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric)
+
                     with cols[i % 2]:
                         st.metric(
                             label=metric, 
                             value=f"{doc_data[metric]}", 
                             delta=f"رتبه {doc_ranks[metric]} از {len(df)}",
-                            delta_color="inverse" if "ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric else "normal"
+                            delta_color="inverse" if is_inverse else "normal"
                         )
 
                 st.markdown("---")
@@ -634,20 +721,51 @@ else:
                     if pd.isna(val):
                         continue
                     avg = avg_data[metric]
-                    
-                    if "ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric:
-                        if avg > 0 and val > avg * 1.2:
-                            warnings.append(f"🔴 **نیازمند اصلاح در {metric}:** میزان تجویز شما ({val}) بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
-                            critical_metrics.append((metric, val, avg))
-                        elif avg > 0 and val > avg:
-                            warnings.append(f"🟡 **هشدار در {metric}:** تجویز شما ({val}) کمی بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
-                        else:
-                            goods.append(f"🟢 **عملکرد مطلوب در {metric}:** تجویز شما ({val}) در محدوده استانداردهای درمانگاه است.")
+
+                    m_set = metric_settings.get(metric, {})
+                    direction = m_set.get("direction", None)
+                    ideal = m_set.get("ideal", 0.0)
+                    std = m_set.get("standard", 0.0)
+                    crit = m_set.get("crit", 0.0)
+
+                    has_custom_thresholds = bool(direction and (ideal != 0 or std != 0 or crit != 0))
+
+                    if has_custom_thresholds:
+                        if direction == "کمتر بهتر":
+                            if val <= ideal:
+                                goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** مقدار شما ({val}) در حد ایده‌آل ({ideal}) یا کمتر قرار دارد.")
+                            elif val <= std:
+                                goods.append(f"🟢 **عملکرد مطلوب در {metric}:** مقدار شما ({val}) در محدوده استاندارد ({std}) قرار دارد.")
+                            elif val <= crit:
+                                warnings.append(f"🟡 **هشدار در {metric}:** مقدار شما ({val}) فراتر از حد استاندارد ({std}) است.")
+                            else:
+                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** مقدار شما ({val}) از حد بحرانی ({crit}) عبور کرده است.")
+                                critical_metrics.append((metric, val, std))
+                        else:  # بیشتر بهتر
+                            if val >= ideal:
+                                goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** مقدار شما ({val}) در حد ایده‌آل ({ideal}) یا بیشتر قرار دارد.")
+                            elif val >= std:
+                                goods.append(f"🟢 **عملکرد مطلوب در {metric}:** مقدار شما ({val}) در محدوده استاندارد ({std}) قرار دارد.")
+                            elif val >= crit:
+                                warnings.append(f"🟡 **هشدار در {metric}:** مقدار شما ({val}) پایین‌تر از حد استاندارد ({std}) است.")
+                            else:
+                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** مقدار شما ({val}) پایین‌تر از حد بحرانی ({crit}) است.")
+                                critical_metrics.append((metric, val, std))
                     else:
-                        if avg > 0 and val < avg * 0.8:
-                            warnings.append(f"🟡 **توجه در {metric}:** آمار شما ({val}) پایین‌تر از میانگین درمانگاه ({round(avg, 1)}) است.")
+                        # تحلیل بر اساس میانگین درمانگاه (حالت پیش‌فرض)
+                        if "ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric:
+                            if avg > 0 and val > avg * 1.2:
+                                warnings.append(f"🔴 **نیازمند اصلاح در {metric}:** میزان تجویز شما ({val}) بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
+                                critical_metrics.append((metric, val, avg))
+                            elif avg > 0 and val > avg:
+                                warnings.append(f"🟡 **هشدار در {metric}:** تجویز شما ({val}) کمی بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
+                            else:
+                                goods.append(f"🟢 **عملکرد مطلوب در {metric}:** تجویز شما ({val}) در محدوده استانداردهای درمانگاه است.")
                         else:
-                            goods.append(f"🟢 **وضعیت مناسب در {metric}:** آمار شما در سطح مطلوب قرار دارد.")
+                            if avg > 0 and val < avg * 0.8:
+                                warnings.append(f"🟡 **توجه در {metric}:** آمار شما ({val}) پایین‌تر از میانگین درمانگاه ({round(avg, 1)}) است.")
+                            else:
+                                goods.append(f"🟢 **وضعیت مناسب در {metric}:** آمار شما در سطح مطلوب قرار دارد.")
 
                 if warnings:
                     st.error("### موارد نیازمند بازبینی")
