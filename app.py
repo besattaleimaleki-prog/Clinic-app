@@ -5,17 +5,27 @@ import os
 import json
 import re
 
-# تابع پاکسازی پیشوندها و استانداردسازی نام کاربری
-def clean_username(text):
-    if not text:
+# ------------------ تابع هوشمند پاکسازی و تطبیق اسامی ------------------
+def clean_name(text):
+    """
+    پاکسازی پیشوندها، یکسان‌سازی حروف فارسی و حذف فاصله‌های اضافی.
+    مثال: 'دکتر جواد پژوه فام' -> 'جواد پژوه فام'
+    مثال: 'آقای دکتر جواد پژوه فام' -> 'جواد پژوه فام'
+    """
+    if not text or pd.isna(text):
         return ""
     text = str(text).strip()
-    # یکسان‌سازی ی و ک
+    # یکسان‌سازی حروف ی و ک
     text = text.replace('ي', 'ی').replace('ك', 'ک')
-    # حذف پیشوندها (دکتر، خانم، آقا، آقای، مهندس) از ابتدای متن
-    prefix_pattern = r'^(دکتر|خانم|آقا|آقای|اقای|مهندس)\b\s*'
-    text = re.sub(prefix_pattern, '', text, flags=re.IGNORECASE)
-    # حذف فاصله‌های اضافی
+    
+    # الگوی شناسایی پیشوندهای رایج
+    prefix_pattern = r'^(دکتر|خانم|آقای|آقا|اقای|مهندس|پزشک)\b\s*'
+    
+    # پاکسازی متوالی برای پیشوندهای چندگانه (مانند "خانم دکتر ...")
+    while re.search(prefix_pattern, text, flags=re.IGNORECASE):
+        text = re.sub(prefix_pattern, '', text, flags=re.IGNORECASE).strip()
+        
+    # حذف فاصله‌های اضافی بین نام و نام خانوادگی
     return " ".join(text.split())
 
 st.set_page_config(page_title="سیستم ارزیابی نسخ درمانگاه", layout="wide")
@@ -184,19 +194,27 @@ if 'metric_settings' not in st.session_state:
 
 load_settings()
 
+# بارگذاری اولیه فایل شاخص‌های کلی
 if 'df' not in st.session_state or st.session_state.df is None:
     if os.path.exists(DATA_FILE):
         try:
-            st.session_state.df = pd.read_excel(DATA_FILE)
+            df_init = pd.read_excel(DATA_FILE)
+            doc_c = df_init.columns[0]
+            df_init[doc_c] = df_init[doc_c].apply(clean_name)
+            st.session_state.df = df_init
         except Exception:
             st.session_state.df = None
     else:
         st.session_state.df = None
 
+# بارگذاری اولیه فایل اقلام دارویی
 if 'df_drugs' not in st.session_state or st.session_state.df_drugs is None:
     if os.path.exists(DRUG_DATA_FILE):
         try:
-            st.session_state.df_drugs = pd.read_excel(DRUG_DATA_FILE)
+            df_d_init = pd.read_excel(DRUG_DATA_FILE)
+            doc_c = df_d_init.columns[0]
+            df_d_init[doc_c] = df_d_init[doc_c].apply(clean_name)
+            st.session_state.df_drugs = df_d_init
         except Exception:
             st.session_state.df_drugs = None
     else:
@@ -230,7 +248,7 @@ if not st.session_state.logged_in:
         if st.session_state.df is not None:
             df = st.session_state.df
             doctor_col = df.columns[0]
-            doctors_list = df[doctor_col].dropna().tolist()
+            doctors_list = df[doctor_col].dropna().unique().tolist()
             selected_doc = st.selectbox("نام خود را انتخاب کنید:", doctors_list)
         else:
             st.info("ℹ️ اطلاعات درمانگاه هنوز توسط مدیر بارگذاری نشده است.")
@@ -239,16 +257,12 @@ if not st.session_state.logged_in:
         doc_password = st.text_input("رمز عبور اختصاصی (پیش‌فرض: 1234)", type="password")
         
         if st.button("ورود به پنل پزشک", type="primary"):
-            raw_target_doc = selected_doc.strip() if selected_doc else ""
-            target_doc = clean_username(selected_doc)
+            target_doc = clean_name(selected_doc)
             
             if not target_doc:
                 st.error("لطفاً نام خود را مشخص کنید.")
             else:
-                expected_password = st.session_state.doctor_passwords.get(
-                    target_doc, 
-                    st.session_state.doctor_passwords.get(raw_target_doc, DOCTOR_DEFAULT_PASSWORD)
-                )
+                expected_password = st.session_state.doctor_passwords.get(target_doc, DOCTOR_DEFAULT_PASSWORD)
                 
                 if doc_password == expected_password:
                     st.session_state.logged_in = True
@@ -300,9 +314,13 @@ else:
                     uploaded_file.seek(0)
                     df_new = pd.read_html(uploaded_file)[0]
                 
+                # پاکسازی هوشمند اسامی پزشکان در فایل اکسل جدید
+                doc_col_name = df_new.columns[0]
+                df_new[doc_col_name] = df_new[doc_col_name].apply(clean_name)
+                
                 st.session_state.df = df_new
                 df_new.to_excel(DATA_FILE, index=False)
-                st.success("فایل با موفقیت بارگذاری و ذخیره شد.")
+                st.success("فایل با موفقیت بارگذاری، پاکسازی اسامی و ذخیره شد.")
 
             if st.session_state.df is not None:
                 df = st.session_state.df
@@ -324,7 +342,7 @@ else:
                 doctor_col = df.columns[0]
                 metrics = df.columns[1:]
                 df_ranks = calculate_ranks(df, metrics)
-                doctors_list = df[doctor_col].dropna().tolist()
+                doctors_list = df[doctor_col].dropna().unique().tolist()
                 
                 selected_doc = st.selectbox("انتخاب پزشک جهت بررسی:", doctors_list)
                 doc_data = df[df[doctor_col] == selected_doc].iloc[0]
@@ -363,9 +381,13 @@ else:
                     uploaded_drug_file.seek(0)
                     df_d_new = pd.read_html(uploaded_drug_file)[0]
 
+                # پاکسازی هوشمند اسامی پزشکان در فایل اقلام دارویی
+                doc_col_d = df_d_new.columns[0]
+                df_d_new[doc_col_d] = df_d_new[doc_col_d].apply(clean_name)
+
                 st.session_state.df_drugs = df_d_new
                 df_d_new.to_excel(DRUG_DATA_FILE, index=False)
-                st.success("فایل اقلام دارویی با موفقیت ذخیره شد.")
+                st.success("فایل اقلام دارویی با موفقیت پاکسازی و ذخیره شد.")
 
             if st.session_state.df_drugs is not None:
                 df_d = st.session_state.df_drugs.copy()
@@ -429,14 +451,6 @@ else:
             st.header("📋 میزان تجویز هر دارو به ازای هر ویزیت پزشک")
             st.markdown("محاسبه نسبت مجموع داروی تجویز شده به تعداد کل ویزیت‌های هر پزشک (**اکسل ۱:** نام پزشک + تعداد ویزیت | **اکسل ۲:** نام پزشک + نام دارو + تعداد تجویزی)")
 
-            def clean_doctor_name(text):
-                if pd.isna(text):
-                    return ""
-                text = str(text).strip()
-                text = text.replace('ي', 'ی').replace('ك', 'ک')
-                text = text.replace('دکتر', '').replace('پزشک', '')
-                return " ".join(text.split())
-
             if st.session_state.df is None or st.session_state.df_drugs is None:
                 st.error("⚠️ لطفا ابتدا هر دو فایل اکسل (شاخص‌های کل و اقلام دارویی) را بارگذاری کنید.")
             else:
@@ -477,12 +491,12 @@ else:
 
                         if selected_drug:
                             df_selected_drug = df_drugs[df_drugs[drug_name_col] == selected_drug].copy()
-                            df_selected_drug['doc_clean'] = df_selected_drug[doc_col_drug].apply(clean_doctor_name)
+                            df_selected_drug['doc_clean'] = df_selected_drug[doc_col_drug].apply(clean_name)
                             doc_drug_qty = df_selected_drug.groupby('doc_clean')[drug_qty_col].sum().reset_index()
 
                             doc_visits = df_main[[doc_col_main, visit_col]].copy()
                             doc_visits[visit_col] = pd.to_numeric(doc_visits[visit_col], errors='coerce').fillna(0)
-                            doc_visits['doc_clean'] = doc_visits[doc_col_main].apply(clean_doctor_name)
+                            doc_visits['doc_clean'] = doc_visits[doc_col_main].apply(clean_name)
 
                             merged_data = pd.merge(doc_visits, doc_drug_qty, on='doc_clean', how='left')
                             merged_data[drug_qty_col] = merged_data[drug_qty_col].fillna(0)
@@ -507,11 +521,11 @@ else:
 
                                 fig_bar = px.bar(
                                     merged_data,
-                                    x=doc_col_main,
+                                    x='doc_clean',
                                     y='میزان_در_هر_ویزیت',
                                     text='برچسب',
                                     labels={
-                                        doc_col_main: 'نام پزشک', 
+                                        'doc_clean': 'نام پزشک', 
                                         'میزان_در_هر_ویزیت': 'تعداد دارو به ازای هر ویزیت'
                                     },
                                     color='میزان_در_هر_ویزیت',
@@ -526,7 +540,7 @@ else:
                                 st.plotly_chart(fig_bar, use_container_width=True)
 
                                 st.subheader("📋 جدول جزئیات محاسبات")
-                                table_df = merged_data[[doc_col_main, drug_qty_col, visit_col, 'میزان_در_هر_ویزیت']].copy()
+                                table_df = merged_data[['doc_clean', drug_qty_col, visit_col, 'میزان_در_هر_ویزیت']].copy()
                                 table_df.columns = ['نام پزشک', 'کل داروی تجویز شده', 'تعداد کل ویزیت‌ها', 'میزان به ازای هر ویزیت']
                                 table_df['میزان به ازای هر ویزیت'] = table_df['میزان به ازای هر ویزیت'].round(2)
                                 st.dataframe(table_df.set_index('نام پزشک'), use_container_width=True)
@@ -630,12 +644,12 @@ else:
             st.markdown("---")
             if st.session_state.df is not None:
                 df = st.session_state.df
-                doctors_list = df[df.columns[0]].dropna().tolist()
+                doctors_list = df[df.columns[0]].dropna().unique().tolist()
                 selected_target_doc = st.selectbox("پزشک مورد نظر را انتخاب کنید:", doctors_list, key="admin_target_doc")
-                current_doc_note = st.session_state.admin_doctor_notes.get(selected_target_doc, "")
+                current_doc_note = st.session_state.admin_doctor_notes.get(clean_name(selected_target_doc), "")
                 spec_note = st.text_area(f"متن توصیه اختصاصی برای {selected_target_doc}:", value=current_doc_note, height=120)
                 if st.button(f"ذخیره توصیه اختصاصی برای {selected_target_doc}", type="primary"):
-                    st.session_state.admin_doctor_notes[selected_target_doc] = spec_note
+                    st.session_state.admin_doctor_notes[clean_name(selected_target_doc)] = spec_note
                     save_settings()
                     st.success("توصیه اختصاصی ذخیره شد.")
 
@@ -647,16 +661,11 @@ else:
     # ۲. بخش دسترسی محدود پزشک (DOCTOR)
     # -------------------------------------------------------------
     elif st.session_state.user_role == "doctor":
-        current_doc = st.session_state.doctor_name
+        current_doc = clean_name(st.session_state.doctor_name)
         st.title(f"👨‍⚕️ پنل اختصاصی ارتقای عملکرد: {current_doc}")
 
         doc_notes_dict = st.session_state.get('admin_doctor_notes', {})
         doc_note_content = doc_notes_dict.get(current_doc, "")
-        if not doc_note_content:
-            for k, v in doc_notes_dict.items():
-                if clean_username(k) == current_doc:
-                    doc_note_content = v
-                    break
 
         has_gen_note = bool(st.session_state.get('admin_general_notes', '').strip())
         has_doc_note = bool(doc_note_content.strip())
@@ -676,7 +685,7 @@ else:
             doctor_col = df.columns[0]
             metrics = df.columns[1:]
 
-            df['doc_clean'] = df[doctor_col].apply(clean_username)
+            df['doc_clean'] = df[doctor_col].apply(clean_name)
 
             if current_doc not in df['doc_clean'].values:
                 st.error(f"❌ نام شما ({current_doc}) در فایل اکسل پیدا نشد.")
@@ -686,7 +695,7 @@ else:
                 avg_data = numeric_df.mean()
                 
                 df_ranks = calculate_ranks(df, metrics)
-                df_ranks['doc_clean'] = df_ranks[doctor_col].apply(clean_username)
+                df_ranks['doc_clean'] = df_ranks[doctor_col].apply(clean_name)
                 doc_ranks = df_ranks[df_ranks['doc_clean'] == current_doc].iloc[0]
 
                 st.subheader("📋 خلاصه آمار و رتبه شما در درمانگاه")
