@@ -3,6 +3,20 @@ import pandas as pd
 import plotly.express as px
 import os
 import json
+import re
+
+# تابع پاکسازی پیشوندها و استانداردسازی نام کاربری
+def clean_username(text):
+    if not text:
+        return ""
+    text = str(text).strip()
+    # یکسان‌سازی ی و ک
+    text = text.replace('ي', 'ی').replace('ك', 'ک')
+    # حذف پیشوندها (دکتر، خانم، آقا، آقای، مهندس) از ابتدای متن
+    prefix_pattern = r'^(دکتر|خانم|آقا|آقای|اقای|مهندس)\b\s*'
+    text = re.sub(prefix_pattern, '', text, flags=re.IGNORECASE)
+    # حذف فاصله‌های اضافی
+    return " ".join(text.split())
 
 st.set_page_config(page_title="سیستم ارزیابی نسخ درمانگاه", layout="wide")
 
@@ -193,7 +207,7 @@ if not st.session_state.logged_in:
     login_type = st.radio("نوع ورود را انتخاب کنید:", ["ورود پزشک 👤", "ورود مدیر / ادمین 🛠️"], horizontal=True)
     st.markdown("---")
     
-    if login_type == "ورود مدیر / ادمین 🛠️":
+# -----    if login_type == "ورود مدیر / ادمین 🛠️":
         st.subheader("ورود مدیر سیستم")
         username = st.text_input("نام کاربری ادمین")
         password = st.text_input("رمز عبور ادمین", type="password")
@@ -220,21 +234,28 @@ if not st.session_state.logged_in:
         doc_password = st.text_input("رمز عبور اختصاصی (پیش‌فرض: 1234)", type="password")
         
         if st.button("ورود به پنل پزشک", type="primary"):
-            target_doc = selected_doc.strip() if selected_doc else ""
+            raw_target_doc = selected_doc.strip() if selected_doc else ""
+            # پاکسازی پیشوندها (دکتر، خانم، آقا و ...) از نام پزشک
+            target_doc = clean_username(selected_doc)
+            
             if not target_doc:
                 st.error("لطفاً نام خود را مشخص کنید.")
             else:
-                expected_password = st.session_state.doctor_passwords.get(target_doc, DOCTOR_DEFAULT_PASSWORD)
+                # بررسی رمز عبور (پشتیبانی هم از نام با پیشوند و هم بدون پیشوند)
+                expected_password = st.session_state.doctor_passwords.get(
+                    target_doc, 
+                    st.session_state.doctor_passwords.get(raw_target_doc, DOCTOR_DEFAULT_PASSWORD)
+                )
+                
                 if doc_password == expected_password:
                     st.session_state.logged_in = True
                     st.session_state.user_role = "doctor"
-                    st.session_state.doctor_name = target_doc
+                    st.session_state.doctor_name = target_doc  # ذخیره نام پاکسازی‌شده
                     st.success(f"خوش آمدید {target_doc}")
                     st.rerun()
                 else:
                     st.error("رمز عبور اشتباه است.")
-
-# ------------------ پنل مدیریت و پزشک ------------------
+------------ پنل مدیریت و پزشک ------------------
 else:
     with st.sidebar:
         st.write(f"👤 **کاربر متصل:** {st.session_state.doctor_name if st.session_state.user_role == 'doctor' else 'مدیر سیستم'}")
