@@ -64,6 +64,10 @@ if 'df' not in st.session_state:
     st.session_state.df = None
 if 'doctor_passwords' not in st.session_state:
     st.session_state.doctor_passwords = {}
+if 'admin_general_notes' not in st.session_state:
+    st.session_state.admin_general_notes = ""
+if 'admin_doctor_notes' not in st.session_state:
+    st.session_state.admin_doctor_notes = {}
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
@@ -155,7 +159,7 @@ else:
                 else:
                     df_ranks[col] = df[col].rank(ascending=True, method='min').astype(int)
 
-            tab1, tab2, tab3 = st.tabs(["📈 مقایسه کل پزشکان", "👤 بررسی فردی پزشکان", "💾 خروجی PDF"])
+            tab1, tab2, tab3, tab4 = st.tabs(["📈 مقایسه کل پزشکان", "👤 بررسی فردی پزشکان", "📝 بازخورد و توصیه‌های مدیریت", "💾 خروجی PDF"])
 
             with tab1:
                 st.header("مقایسه کلی تمام پزشکان")
@@ -178,10 +182,29 @@ else:
                         st.metric(label=metric, value=f"{doc_data[metric]}", delta=f"رتبه {doc_ranks[metric]} از {len(df)}")
 
             with tab3:
+                st.header("📝 مدیریت توصیه‌ها و بازخوردهای مدیریت")
+                
+                st.subheader("📢 پیام و توصیه عمومی (قابل مشاهده برای تمام پزشکان)")
+                gen_note = st.text_area("متن پیام عمومی مدیریت:", value=st.session_state.admin_general_notes, height=100)
+                if st.button("ذخیره پیام عمومی", type="primary"):
+                    st.session_state.admin_general_notes = gen_note
+                    st.success("پیام عمومی مدیریت با موفقیت بروزرسانی شد.")
+
+                st.markdown("---")
+
+                st.subheader("✉️ توصیه و بازخورد اختصاصی به یک پزشک مشخص")
+                selected_target_doc = st.selectbox("پزشک مورد نظر را انتخاب کنید:", df[doctor_col].tolist(), key="admin_target_doc")
+                current_doc_note = st.session_state.admin_doctor_notes.get(selected_target_doc, "")
+                spec_note = st.text_area(f"متن توصیه اختصاصی برای {selected_target_doc}:", value=current_doc_note, height=120)
+                if st.button(f"ذخیره توصیه اختصاصی برای {selected_target_doc}", type="primary"):
+                    st.session_state.admin_doctor_notes[selected_target_doc] = spec_note
+                    st.success(f"توصیه اختصاصی برای {selected_target_doc} با موفقیت ثبت شد.")
+
+            with tab4:
                 st.info("برای چاپ یا ذخیره PDF گزارشات کل، از گزینه Print مرورگر استفاده کنید.")
 
         else:
-            st.warning("⚠️ هنوز هیچ فایل اکسلی بارگذاری نشده است.")
+            st.warning("⚠️ هنوز هیچ فایل اکسلی بارگذاری نشده است. برای دسترسی به بخش بازخوردها و تحلیل‌ها، ابتدا فایل اکسل را بارگذاری نمایید.")
 
     # -------------------------------------------------------------
     # ۲. بخش دسترسی محدود پزشک (DOCTOR)
@@ -189,6 +212,18 @@ else:
     elif st.session_state.user_role == "doctor":
         current_doc = st.session_state.doctor_name
         st.title(f"👨‍⚕️ پنل اختصاصی ارتقای عملکرد: {current_doc}")
+
+        # ------------------ نمایش پیام‌ها و توصیه‌های ادمین/مدیریت ------------------
+        has_gen_note = bool(st.session_state.get('admin_general_notes', '').strip())
+        has_doc_note = bool(st.session_state.get('admin_doctor_notes', {}).get(current_doc, '').strip())
+
+        if has_gen_note or has_doc_note:
+            st.subheader("📮 پیام‌ها و توصیه‌های مدیریت درمانگاه")
+            if has_gen_note:
+                st.info(f"**📢 اطلاعیه عمومی مدیریت:**\n\n{st.session_state.admin_general_notes}")
+            if has_doc_note:
+                st.warning(f"**✉️ توصیه اختصاصی مدیریت برای شما ({current_doc}):**\n\n{st.session_state.admin_doctor_notes[current_doc]}")
+            st.markdown("---")
 
         if st.session_state.df is None:
             st.warning("⚠️ اطلاعات درمانگاه هنوز توسط مدیر بارگذاری نشده است. لطفاً منتظر بمانید تا مدیر فایل اکسل را آپلود کند.")
@@ -229,7 +264,7 @@ else:
                 # ------------------ تحلیل هوشمند و هشدارهای تجویزی ------------------
                 st.subheader("⚠️ تحلیل هوشمند وضعیت تجویزی شما")
                 warnings, goods = [], []
-                critical_metrics = []  # ذخیره شاخص‌هایی که نیازمند راهنمایی علمی هستند
+                critical_metrics = []
 
                 for metric in metrics:
                     val = doc_data[metric]
