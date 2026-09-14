@@ -205,7 +205,8 @@ DOCTOR_DEFAULT_PASSWORD = "1234"
 if not st.session_state.logged_in:
     st.title("🔑 ورود به سیستم ارزیابی نسخ درمانگاه")
     login_type = st.radio("نوع ورود را انتخاب کنید:", ["ورود پزشک 👤", "ورود مدیر / ادمین 🛠️"], horizontal=True)
-    st.markdown("---")if login_type == "ورود مدیر / ادمین 🛠️":
+    st.markdown("---")
+if login_type == "ورود مدیر / ادمین 🛠️":
         st.subheader("ورود مدیر سیستم")
         username = st.text_input("نام کاربری ادمین")
         password = st.text_input("رمز عبور ادمین", type="password")
