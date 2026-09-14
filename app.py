@@ -2,55 +2,72 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import os
+import json
 
 st.set_page_config(page_title="سیستم ارزیابی نسخ درمانگاه", layout="wide")
 
-# ------------------ توابع راهنمای بالینی و گایدلاین‌های بین‌المللی ------------------
+# مسیرهای ذخیره‌سازی دائمی فایل و تنظیمات
+DATA_FILE = "saved_clinic_data.xlsx"
+SETTINGS_FILE = "system_settings.json"
+
+# ------------------ مدیریت ذخیره و بازیابی دائمی داده‌ها ------------------
+def save_settings():
+    """ذخیره رمزها و یادداشت‌های ادمین در فایل JSON"""
+    settings = {
+        "passwords": st.session_state.doctor_passwords,
+        "general_notes": st.session_state.admin_general_notes,
+        "doctor_notes": st.session_state.admin_doctor_notes
+    }
+    with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        json.dump(settings, f, ensure_ascii=False, indent=4)
+
+def load_settings():
+    """بازیابی رمزها و یادداشت‌های ادمین از فایل JSON"""
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+                st.session_state.doctor_passwords = settings.get("passwords", {})
+                st.session_state.admin_general_notes = settings.get("general_notes", "")
+                st.session_state.admin_doctor_notes = settings.get("doctor_notes", {})
+        except Exception:
+            pass
+
+# ------------------ توابع راهنمای بالینی ------------------
 def get_clinical_guideline(metric_name, user_val, avg_val):
-    """
-    تولید توصیه‌های علمی و گایدلاین‌های اختصاصی (WHO / CDC) بر اساس شاخص‌های تجویزی
-    """
     metric_lower = metric_name.lower()
     
-    # ۱. گایدلاین آنتی‌بیوتیک‌ها
     if any(kw in metric_lower for kw in ['آنتی', 'بیوتیک', 'چرك', 'عفونت', 'کپسول']):
         return (
             "🦠 **گایدلاین مدیریت تجویز آنتی‌بیوتیک (CDC & WHO Antibiotic Stewardship):**\n\n"
             "طبق گزارش‌های سازمان جهانی بهداشت (WHO) و CDC، بیش از ۶۰ تا ۷۰ درصد عفونت‌های حاد تنفسی فوقانی در مراقبت‌های سرپایی منشأ ویروسی دارند و نیازی به دریافت آنتی‌بیوتیک ندارند. "
-            "توصیه می‌شود در مواجهه با علائم تنفسی خفیف تا متوسط، از الگوریتم طبقه‌بندی **AWaRe** استفاده کرده و درمان‌های حمایتی (Symptomatic Relief) را در اولویت قرار دهید. "
-            "کاهش تجویزهای غیرضروری آنتی‌بیوتیک نه تنها موقعیت کیفی شما را در ارزیابی‌های درمانگاه ارتقا می‌دهد، بلکه از بروز مقاومت‌های میکروبی کشنده و عوارض گوارشی بیماران جلوگیری می‌کند."
+            "توصیه می‌شود در مواجهه با علائم تنفسی خفیف تا متوسط، از الگوریتم طبقه‌بندی **AWaRe** استفاده کرده و درمان‌های حمایتی را در اولویت قرار دهید. "
+            "کاهش تجویزهای غیرضروری آنتی‌بیوتیک نه تنها موقعیت کیفی شما را در ارزیابی‌های درمانگاه ارتقا می‌دهد، بلکه از بروز مقاومت‌های میکروبی کشنده جلوگیری می‌کند."
         )
-    
-    # ۲. گایدلاین داروی تزریقی
     elif any(kw in metric_lower for kw in ['تزریق', 'آمپول', 'ویال']):
         return (
             "💉 **راهنمای تجویز منطقی داروهای تزریقی (WHO Injection Safety Guidelines):**\n\n"
-            "بر اساس استانداردهای WHO، اولویت اول در بیماران سرپایی همواره با **مسیر خوراکی** است. زیست‌دست‌یابی (Bioavailability) اکثر داروهای خوراکی مدرن برابری لازم با فرم تزریقی را دارد. "
-            "جایگزینی فرم خوراکی، احتمال عوارض خطرساز مانند شوک آنافیلاکسی، عفونت‌های موضعی و هزینه‌های تحمیلی به بیمار را تا ۸۰٪ کاهش می‌دهد. تجویز فرم تزریقی صرفاً در شرایط حاد یا عدم امکان بلع خوراکی توصیه می‌شود."
+            "بر اساس استانداردهای WHO، اولویت اول در بیماران سرپایی همواره با **مسیر خوراکی** است. زیست‌دست‌یابی اکثر داروهای خوراکی مدرن برابری لازم با فرم تزریقی را دارد. "
+            "جایگزینی فرم خوراکی، احتمال عوارض خطرساز مانند شوک آنافیلاکسی و هزینه‌های تحمیلی به بیمار را تا ۸۰٪ کاهش می‌دهد."
         )
-        
-    # ۳. گایدلاین کورتیکواستروئیدها / کورتون
     elif any(kw in metric_lower for kw in ['کورتون', 'استروئید', 'دگزا', 'بتامتازون', 'هیدروکورتیزون']):
         return (
             "🛡️ **گایدلاین بالینی مصرف کورتیکواستروئیدها (NICE & WHO):**\n\n"
-            "تجویز بی‌رویه کورتون‌های سیستمیک در بیماری‌های ویروسی شایع، علاوه بر تضعیف سیستم ایمنی و طولانی‌تر کردن دوره بازتوانی، خطر عوارض متابولیک، پوکی استخوان و اختلالات هورمونی را افزایش می‌دهد. "
-            "بر اساس گایدلاین‌های بالینی NICE، تجویز کورتون‌ها باید محدود به اندیکاسیون‌های قطعی (مانند حمله حاد آسم، کروپ شدید یا بیماری‌های خودایمنی) باشد."
+            "تجویز بی‌رویه کورتون‌های سیستمیک در بیماری‌های ویروسی شایع، علاوه بر تضعیف سیستم ایمنی، خطر عوارض متابولیک و اختلالات هورمونی را افزایش می‌دهد. "
+            "بر اساس گایدلاین‌های بالینی NICE، تجویز کورتون‌ها باید محدود به اندیکاسیون‌های قطعی (مانند حمله حاد آسم یا بیماری‌های خودایمنی) باشد."
         )
-        
-    # ۴. گایدلاین تعداد اقلام در نسخه (پلی‌فارماسی)
     elif any(kw in metric_lower for kw in ['تعداد', 'اقلام', 'میانگین قلم', 'قلم']):
         return (
             "💊 **راهنمای پیشگیری از پلی‌فارماسی (WHO Rational Drug Use):**\n\n"
             "شاخص جهانی WHO برای میانگین تعداد اقلام دارو در هر نسخه سرپایی، **حداکثر ۱.۸ تا ۲.۲ قلم** است. "
-            "افزایش تعداد اقلام نسخه (Polypharmacy) به‌طور نمایی خطر تداخلات دارویی ناخواسته، عوارض جانبی و عدم پایبندی بیمار به درمان (Non-adherence) را بالا می‌برد. غربالگری نسخه و حذف داروهای مکمل غیرضروری، گامی اساسی در ارتقای ایمنی بیمار است."
+            "افزایش تعداد اقلام نسخه (Polypharmacy) خطر تداخلات دارویی ناخواسته و عوارض جانبی را بالا می‌برد."
         )
-        
-    # ۵. گایدلاین عمومی برای سایر شاخص‌ها
     else:
         return (
             f"📖 **توصیه علمی بر اساس پزشکی مبتنی بر شواهد (EBM) در شاخص {metric_name}:**\n\n"
             f"میزان تجویز شما در شاخص **{metric_name}** با میانگین استاندارد درمانگاه فاصله دارد. "
-            "بررسی مجدد رفرنس‌های بالینی روز دنیا و منطبق‌سازی پروتکل درمانی با پروپوزال‌های ملی و بین‌المللی، به شما کمک می‌کند علاوه بر بهبود پیامدهای درمانی بیماران، رتبه کیفی خود را در درمانگاه بهبود ببخشید."
+            "بررسی مجدد رفرنس‌های بالینی روز دنیا به شما کمک می‌کند تا علاوه بر بهبود پیامدهای درمانی بیماران، رتبه کیفی خود را ارتقا دهید."
         )
 
 # ------------------ مدیریت وضعیت نشست (Session State) ------------------
@@ -60,14 +77,25 @@ if 'user_role' not in st.session_state:
     st.session_state.user_role = None
 if 'doctor_name' not in st.session_state:
     st.session_state.doctor_name = None
-if 'df' not in st.session_state:
-    st.session_state.df = None
 if 'doctor_passwords' not in st.session_state:
     st.session_state.doctor_passwords = {}
 if 'admin_general_notes' not in st.session_state:
     st.session_state.admin_general_notes = ""
 if 'admin_doctor_notes' not in st.session_state:
     st.session_state.admin_doctor_notes = {}
+
+# فراخوانی تنظیمات ذخیره‌شده از قبل
+load_settings()
+
+# بازیابی فایل اکسل از دیسک در صورت وجود
+if 'df' not in st.session_state or st.session_state.df is None:
+    if os.path.exists(DATA_FILE):
+        try:
+            st.session_state.df = pd.read_excel(DATA_FILE)
+        except Exception:
+            st.session_state.df = None
+    else:
+        st.session_state.df = None
 
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
@@ -141,11 +169,18 @@ else:
         st.title("🛠️ پنل مدیریت و ارزیابی کل درمانگاه")
         
         st.subheader("📁 بارگذاری داده‌های درمانگاه")
+        
+        if os.path.exists(DATA_FILE):
+            st.info("💡 یک فایل اکسل ذخیره‌شده از قبل در سیستم موجود است. در صورت نیاز می‌توانید فایل جدیدی را جایگزین کنید.")
+
         uploaded_file = st.file_uploader("لطفاً فایل اکسل خروجی سیستم را آپلود کنید", type=["xlsx", "xls"])
         
         if uploaded_file is not None:
-            st.session_state.df = pd.read_excel(uploaded_file)
-            st.success("فایل اکسل با موفقیت بارگذاری شد.")
+            df_new = pd.read_excel(uploaded_file)
+            st.session_state.df = df_new
+            # ذخیره دائمی فایل آپلودشده روی دیسک
+            df_new.to_excel(DATA_FILE, index=False)
+            st.success("فایل اکسل با موفقیت بارگذاری و به صورت دائمی در سیستم ذخیره شد.")
 
         if st.session_state.df is not None:
             df = st.session_state.df
@@ -188,7 +223,8 @@ else:
                 gen_note = st.text_area("متن پیام عمومی مدیریت:", value=st.session_state.admin_general_notes, height=100)
                 if st.button("ذخیره پیام عمومی", type="primary"):
                     st.session_state.admin_general_notes = gen_note
-                    st.success("پیام عمومی مدیریت با موفقیت بروزرسانی شد.")
+                    save_settings()
+                    st.success("پیام عمومی مدیریت با موفقیت ذخیره شد.")
 
                 st.markdown("---")
 
@@ -198,7 +234,8 @@ else:
                 spec_note = st.text_area(f"متن توصیه اختصاصی برای {selected_target_doc}:", value=current_doc_note, height=120)
                 if st.button(f"ذخیره توصیه اختصاصی برای {selected_target_doc}", type="primary"):
                     st.session_state.admin_doctor_notes[selected_target_doc] = spec_note
-                    st.success(f"توصیه اختصاصی برای {selected_target_doc} با موفقیت ثبت شد.")
+                    save_settings()
+                    st.success(f"توصیه اختصاصی برای {selected_target_doc} با موفقیت ذخیره شد.")
 
             with tab4:
                 st.info("برای چاپ یا ذخیره PDF گزارشات کل، از گزینه Print مرورگر استفاده کنید.")
@@ -271,7 +308,7 @@ else:
                     avg = avg_data[metric]
                     
                     if "ویزیت" not in metric and "آزمایشگاه" not in metric:
-                        if val > avg * 1.2:  # انحراف بیش از ۲۰ درصد
+                        if val > avg * 1.2:
                             warnings.append(f"🔴 **نیازمند اصلاح در {metric}:** میزان تجویز شما ({val}) بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
                             critical_metrics.append((metric, val, avg))
                         elif val > avg:
@@ -305,7 +342,7 @@ else:
                         with st.expander(f"📌 راهنمای بالینی و گایدلاین علمی برای: {metric}", expanded=True):
                             st.markdown(guideline_text)
                 else:
-                    st.success("🎉 **تبریک!** عملکرد تجویزی شما کاملاً منطبق بر استانداردهای درمانگاه و گایدلاین‌های بین‌المللی است و هیچ نقطه انحراف خطرسازی در نسخ شما یافت نشد.")
+                    st.success("🎉 **تبریک!** عملکرد تجویزی شما کاملاً منطبق بر استانداردهای درمانگاه و گایدلاین‌های بین‌المللی است.")
 
                 st.markdown("---")
 
@@ -366,4 +403,5 @@ else:
                     st.error("رمز عبور جدید و تکرار آن یکسان نیستند.")
                 else:
                     st.session_state.doctor_passwords[current_doc] = new_pass
-                    st.success("رمز عبور شما با موفقیت تغییر کرد. در ورودهای بعدی از رمز جدید استفاده کنید.")
+                    save_settings()
+                    st.success("رمز عبور شما با موفقیت تغییر کرد.")
