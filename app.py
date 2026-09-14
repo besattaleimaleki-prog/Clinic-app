@@ -75,21 +75,16 @@ def classify_drug(drug_name):
     """تحلیل و دسته‌بندی هوشمند دارو بر اساس نام و شکل دارویی"""
     name_lower = str(drug_name).strip().lower()
     
-    # تشخیص پماد برای استثنا کردن
     is_oint = any(k in name_lower for k in ['oint', 'ointment', 'پماد'])
     
-    # ۱. اشکال خوراکی
     oral_prefixes = ['tab', 'cap', 'syru', 'susp', 'syrup', 'قرص', 'کپسول', 'شربت', 'ساسپنشن']
     is_oral = any(name_lower.startswith(p) or f" {p}" in name_lower for p in oral_prefixes)
     
-    # ۲. عمومی تزریقی
     inj_gen_prefixes = ['inj', 'infusion', 'solution', 'amp', 'vial', 'تزریقی', 'آمپول']
     is_inj_gen = any(name_lower.startswith(p) or f" {p}" in name_lower or f"{p} " in name_lower for p in inj_gen_prefixes)
     
-    # ۳. فقط Inj
     is_inj_strict = 'inj' in name_lower or 'آمپول' in name_lower
     
-    # ۴. آنتی‌بیوتیک‌ها (بدون پماد)
     abx_keywords = [
         'amox', 'amoxicillin', 'ampicillin', 'cef', 'ceph', 'azithro', 'azithromycin',
         'cipro', 'ciprofloxacin', 'levo', 'levofloxacin', 'metronidazole', 'flagyl',
@@ -101,7 +96,6 @@ def classify_drug(drug_name):
     ]
     is_abx = (not is_oint) and any(k in name_lower for k in abx_keywords)
     
-    # ۵. مسکن‌های NSAID (بدون پماد)
     nsaid_keywords = [
         'ibuprofen', 'gelofen', 'indomethacin', 'diclofenac', 'naproxen',
         'meloxicam', 'piroxicam', 'celecoxib', 'mefenamic', 'aspirin',
@@ -110,7 +104,6 @@ def classify_drug(drug_name):
     ]
     is_nsaid = (not is_oint) and any(k in name_lower for k in nsaid_keywords)
     
-    # ۶. کورتیکواستروئیدها (بدون پماد)
     cortico_keywords = [
         'dexa', 'dexamethasone', 'beta', 'betamethasone', 'hydrocortisone',
         'prednisolone', 'prednisone', 'triamcinolone', 'methylprednisolone',
@@ -129,7 +122,6 @@ def classify_drug(drug_name):
     }
 
 def filter_drug_list(drugs_list, category):
-    """فیلتر کردن لیست داروها بر اساس دسته انتخابی کاربر"""
     result = []
     for d in drugs_list:
         info = classify_drug(d)
@@ -192,7 +184,6 @@ if 'metric_settings' not in st.session_state:
 
 load_settings()
 
-# بازیابی فایل شاخص‌های کل
 if 'df' not in st.session_state or st.session_state.df is None:
     if os.path.exists(DATA_FILE):
         try:
@@ -202,7 +193,6 @@ if 'df' not in st.session_state or st.session_state.df is None:
     else:
         st.session_state.df = None
 
-# بازیابی فایل اقلام دارویی
 if 'df_drugs' not in st.session_state or st.session_state.df_drugs is None:
     if os.path.exists(DRUG_DATA_FILE):
         try:
@@ -346,7 +336,6 @@ else:
                     with cols[i % 2]:
                         st.metric(label=metric, value=f"{doc_data[metric]}", delta=f"رتبه {doc_ranks[metric]} از {len(df)}")
 
-        # --- لیست گزینه‌های فیلتر دارویی مشترک ---
         filter_options = [
             "همه اشکال", 
             "خوراکی (Tab, Cap, Syru, Susp)", 
@@ -384,11 +373,9 @@ else:
                 drug_c = df_d.columns[1]
                 qty_c = df_d.columns[2]
 
-                # پاکسازی مقادیر
                 df_d[qty_c] = pd.to_numeric(df_d[qty_c], errors='coerce').fillna(0)
                 df_d[drug_c] = df_d[drug_c].astype(str).str.strip()
 
-                # حذف داروهای با مجموع تجویز صفر
                 drug_totals = df_d.groupby(drug_c)[qty_c].sum()
                 valid_drugs = drug_totals[drug_totals > 0].index.tolist()
                 df_filtered = df_d[df_d[drug_c].isin(valid_drugs)].copy()
@@ -397,7 +384,6 @@ else:
                     st.warning("هیچ دارویی با مجموع تجویز بیشتر از صفر یافت نشد.")
                 else:
                     form_filter = st.radio("🔍 انتخاب فیلتر دسته‌بندی دارویی:", filter_options, horizontal=True, key="filter_tab3")
-                    
                     selectable_drugs = filter_drug_list(valid_drugs, form_filter)
 
                     if not selectable_drugs:
@@ -454,7 +440,6 @@ else:
             if st.session_state.df is None or st.session_state.df_drugs is None:
                 st.error("⚠️ لطفا ابتدا هر دو فایل اکسل (شاخص‌های کل و اقلام دارویی) را بارگذاری کنید.")
             else:
-                # ۱. خواندن اکسل اول (اطلاعات پزشک و تعداد ویزیت)
                 df_main = st.session_state.df.copy()
                 doc_col_main = df_main.columns[0]
                 
@@ -468,7 +453,6 @@ else:
                     key="select_visit_col_tab"
                 )
 
-                # ۲. خواندن اکسل دوم (نام پزشک، نام دارو، تعداد تجویزی)
                 df_drugs = st.session_state.df_drugs.copy()
                 doc_col_drug = df_drugs.columns[0]
                 drug_name_col = df_drugs.columns[1]
@@ -493,7 +477,6 @@ else:
 
                         if selected_drug:
                             df_selected_drug = df_drugs[df_drugs[drug_name_col] == selected_drug].copy()
-                            
                             df_selected_drug['doc_clean'] = df_selected_drug[doc_col_drug].apply(clean_doctor_name)
                             doc_drug_qty = df_selected_drug.groupby('doc_clean')[drug_qty_col].sum().reset_index()
 
@@ -501,13 +484,7 @@ else:
                             doc_visits[visit_col] = pd.to_numeric(doc_visits[visit_col], errors='coerce').fillna(0)
                             doc_visits['doc_clean'] = doc_visits[doc_col_main].apply(clean_doctor_name)
 
-                            merged_data = pd.merge(
-                                doc_visits, 
-                                doc_drug_qty, 
-                                on='doc_clean', 
-                                how='left'
-                            )
-
+                            merged_data = pd.merge(doc_visits, doc_drug_qty, on='doc_clean', how='left')
                             merged_data[drug_qty_col] = merged_data[drug_qty_col].fillna(0)
 
                             show_zeros = st.checkbox("نمایش پزشکان با تجویز صفر برای این دارو", value=True)
@@ -554,10 +531,10 @@ else:
                                 table_df['میزان به ازای هر ویزیت'] = table_df['میزان به ازای هر ویزیت'].round(2)
                                 st.dataframe(table_df.set_index('نام پزشک'), use_container_width=True)
 
-        # --- تب ۵: تنظیمات سطوح شاخص‌ها ---
+        # --- تب ۵: تنظیمات سطوح شاخص‌ها (کمی + کیفی) ---
         with tab5:
             st.header("⚙️ تنظیمات سطوح و حدود استاندارد شاخص‌ها")
-            st.markdown("در این بخش می‌توانید برای هر شاخص، **حد ایده‌آل**، **حد استاندارد**، **حد بحرانی** و **جهت مطلوبیت** را تعیین کنید.")
+            st.markdown("در این بخش می‌توانید ارزیابی شاخص‌ها را به دو روش **کیفی (نسبت به میانگین درمانگاه)** یا **کمی (اعداد ثابت/عددی)** تنظیم کنید.")
 
             if st.session_state.df is not None:
                 df_curr = st.session_state.df
@@ -569,13 +546,23 @@ else:
                         st.subheader(f"📊 شاخص: `{metric}`")
                         m_curr = st.session_state.metric_settings.get(metric, {})
 
-                        col_dir, col_ideal, col_std, col_crit = st.columns(4)
+                        eval_type_opts = ["کیفی (بر اساس میانگین درمانگاه)", "کمی (اعداد ثابت/عددی)"]
+                        default_eval_type = m_curr.get("eval_type", "کیفی (بر اساس میانگین درمانگاه)")
+                        eval_idx = eval_type_opts.index(default_eval_type) if default_eval_type in eval_type_opts else 0
 
                         default_dir = m_curr.get("direction", "کمتر بهتر" if ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric) else "بیشتر بهتر")
                         dir_opts = ["کمتر بهتر", "بیشتر بهتر"]
                         dir_idx = dir_opts.index(default_dir) if default_dir in dir_opts else 0
 
-                        with col_dir:
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            eval_type = st.radio(
+                                f"نوع ارزیابی شاخص",
+                                eval_type_opts,
+                                index=eval_idx,
+                                key=f"eval_type_{metric}"
+                            )
+                        with c2:
                             direction = st.radio(
                                 f"جهت مطلوبیت",
                                 dir_opts,
@@ -583,32 +570,43 @@ else:
                                 key=f"dir_{metric}"
                             )
 
-                        with col_ideal:
-                            ideal_val = st.number_input(
-                                f"🌟 حد ایده‌آل",
-                                value=float(m_curr.get("ideal", 0.0)),
-                                key=f"ideal_{metric}"
-                            )
+                        ideal_val = float(m_curr.get("ideal", 0.0))
+                        std_val = float(m_curr.get("standard", 0.0))
+                        crit_val = float(m_curr.get("crit", 0.0))
+                        tolerance = float(m_curr.get("tolerance", 10.0))
 
-                        with col_std:
-                            std_val = st.number_input(
-                                f"✅ حد استاندارد",
-                                value=float(m_curr.get("standard", 0.0)),
-                                key=f"std_{metric}"
-                            )
-
-                        with col_crit:
-                            crit_val = st.number_input(
-                                f"🛑 حد بحرانی",
-                                value=float(m_curr.get("crit", 0.0)),
-                                key=f"crit_{metric}"
-                            )
+                        if eval_type == "کمی (اعداد ثابت/عددی)":
+                            col_ideal, col_std, col_crit = st.columns(3)
+                            with col_ideal:
+                                ideal_val = st.number_input(f"🌟 حد ایده‌آل", value=ideal_val, key=f"ideal_{metric}")
+                            with col_std:
+                                std_val = st.number_input(f"✅ حد استاندارد", value=std_val, key=f"std_{metric}")
+                            with col_crit:
+                                crit_val = st.number_input(f"🛑 حد بحرانی", value=crit_val, key=f"crit_{metric}")
+                        else:
+                            if direction == "کمتر بهتر":
+                                rule_text = (
+                                    f"• **🟢 ایده‌آل:** پایین‌تر از میانگین درمانگاه (کمتر از {100-tolerance:.0f}٪ میانگین)\n"
+                                    f"• **🟡 استاندارد:** هم‌تراز با میانگین درمانگاه (بین {100-tolerance:.0f}٪ تا {100+tolerance:.0f}٪ میانگین)\n"
+                                    f"• **🔴 بحرانی:** بالاتر از حد درمانگاه (بیشتر از {100+tolerance:.0f}٪ میانگین)"
+                                )
+                            else:
+                                rule_text = (
+                                    f"• **🟢 ایده‌آل:** بالاتر از میانگین درمانگاه (بیشتر از {100+tolerance:.0f}٪ میانگین)\n"
+                                    f"• **🟡 استاندارد:** هم‌تراز با میانگین درمانگاه (بین {100-tolerance:.0f}٪ تا {100+tolerance:.0f}٪ میانگین)\n"
+                                    f"• **🔴 بحرانی:** پایین‌تر از حد درمانگاه (کمتر از {100-tolerance:.0f}٪ میانگین)"
+                                )
+                            
+                            st.info(f"💡 **سطوح ارزیابی کیفی بر اساس میانگین درمانگاه:**\n\n{rule_text}")
+                            tolerance = st.number_input(f"درصد تلرانس نوسان دور میانگین برای حالت استاندارد (٪)", value=tolerance, min_value=0.0, max_value=50.0, step=1.0, key=f"tol_{metric}")
 
                         updated_settings[metric] = {
+                            "eval_type": eval_type,
                             "direction": direction,
                             "ideal": ideal_val,
                             "standard": std_val,
-                            "crit": crit_val
+                            "crit": crit_val,
+                            "tolerance": tolerance
                         }
                         st.markdown("---")
 
@@ -723,49 +721,55 @@ else:
                     avg = avg_data[metric]
 
                     m_set = metric_settings.get(metric, {})
-                    direction = m_set.get("direction", None)
+                    eval_type = m_set.get("eval_type", "کیفی (بر اساس میانگین درمانگاه)")
+                    direction = m_set.get("direction", "کمتر بهتر" if ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric) else "بیشتر بهتر")
                     ideal = m_set.get("ideal", 0.0)
                     std = m_set.get("standard", 0.0)
                     crit = m_set.get("crit", 0.0)
+                    tol_percent = m_set.get("tolerance", 10.0) / 100.0
 
-                    has_custom_thresholds = bool(direction and (ideal != 0 or std != 0 or crit != 0))
-
-                    if has_custom_thresholds:
+                    if eval_type == "کمی (اعداد ثابت/عددی)":
                         if direction == "کمتر بهتر":
-                            if val <= ideal:
+                            if ideal > 0 and val <= ideal:
                                 goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** مقدار شما ({val}) در حد ایده‌آل ({ideal}) یا کمتر قرار دارد.")
-                            elif val <= std:
+                            elif std > 0 and val <= std:
                                 goods.append(f"🟢 **عملکرد مطلوب در {metric}:** مقدار شما ({val}) در محدوده استاندارد ({std}) قرار دارد.")
-                            elif val <= crit:
+                            elif crit > 0 and val <= crit:
                                 warnings.append(f"🟡 **هشدار در {metric}:** مقدار شما ({val}) فراتر از حد استاندارد ({std}) است.")
                             else:
-                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** مقدار شما ({val}) از حد بحرانی ({crit}) عبور کرده است.")
-                                critical_metrics.append((metric, val, std))
+                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** مقدار شما ({val}) از حد بحرانی عبور کرده است.")
+                                critical_metrics.append((metric, val, std if std > 0 else avg))
                         else:  # بیشتر بهتر
-                            if val >= ideal:
+                            if ideal > 0 and val >= ideal:
                                 goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** مقدار شما ({val}) در حد ایده‌آل ({ideal}) یا بیشتر قرار دارد.")
-                            elif val >= std:
+                            elif std > 0 and val >= std:
                                 goods.append(f"🟢 **عملکرد مطلوب در {metric}:** مقدار شما ({val}) در محدوده استاندارد ({std}) قرار دارد.")
-                            elif val >= crit:
+                            elif crit > 0 and val >= crit:
                                 warnings.append(f"🟡 **هشدار در {metric}:** مقدار شما ({val}) پایین‌تر از حد استاندارد ({std}) است.")
                             else:
-                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** مقدار شما ({val}) پایین‌تر از حد بحرانی ({crit}) است.")
-                                critical_metrics.append((metric, val, std))
-                    else:
-                        # تحلیل بر اساس میانگین درمانگاه (حالت پیش‌فرض)
-                        if "ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric:
-                            if avg > 0 and val > avg * 1.2:
-                                warnings.append(f"🔴 **نیازمند اصلاح در {metric}:** میزان تجویز شما ({val}) بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
+                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** مقدار شما ({val}) پایین‌تر از حد بحرانی است.")
+                                critical_metrics.append((metric, val, std if std > 0 else avg))
+
+                    else:  # ارزیابی کیفی (بر اساس میانگین درمانگاه)
+                        low_bound = avg * (1.0 - tol_percent)
+                        high_bound = avg * (1.0 + tol_percent)
+
+                        if direction == "کمتر بهتر":
+                            if val < low_bound:
+                                goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** میزان تجویز شما ({val}) پایین‌تر از میانگین درمانگاه ({round(avg, 1)}) است.")
+                            elif low_bound <= val <= high_bound:
+                                goods.append(f"🟢 **عملکرد استاندارد در {metric}:** میزان تجویز شما ({val}) هم‌تراز با میانگین درمانگاه ({round(avg, 1)}) است.")
+                            else:
+                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** میزان تجویز شما ({val}) بالاتر از حد میانگین درمانگاه ({round(avg, 1)}) است.")
                                 critical_metrics.append((metric, val, avg))
-                            elif avg > 0 and val > avg:
-                                warnings.append(f"🟡 **هشدار در {metric}:** تجویز شما ({val}) کمی بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
+                        else:  # بیشتر بهتر
+                            if val > high_bound:
+                                goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** آمار شما ({val}) بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
+                            elif low_bound <= val <= high_bound:
+                                goods.append(f"🟢 **عملکرد استاندارد در {metric}:** آمار شما ({val}) هم‌تراز با میانگین درمانگاه ({round(avg, 1)}) است.")
                             else:
-                                goods.append(f"🟢 **عملکرد مطلوب در {metric}:** تجویز شما ({val}) در محدوده استانداردهای درمانگاه است.")
-                        else:
-                            if avg > 0 and val < avg * 0.8:
-                                warnings.append(f"🟡 **توجه در {metric}:** آمار شما ({val}) پایین‌تر از میانگین درمانگاه ({round(avg, 1)}) است.")
-                            else:
-                                goods.append(f"🟢 **وضعیت مناسب در {metric}:** آمار شما در سطح مطلوب قرار دارد.")
+                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** آمار شما ({val}) پایین‌تر از حد میانگین درمانگاه ({round(avg, 1)}) است.")
+                                critical_metrics.append((metric, val, avg))
 
                 if warnings:
                     st.error("### موارد نیازمند بازبینی")
