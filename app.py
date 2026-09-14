@@ -157,7 +157,7 @@ def get_clinical_guideline(metric_name, user_val, avg_val):
         )
     else:
         return (
-            f"📖 **توصیه علمی بر اساس پزشکی مبتنی بر شواهد (EBM) در شاخص {metric_name}:**\n\n"
+            f"📖 **توصیه علمی بر اساس پزشکی مبتنی بر شواهد (EBM) رادر شاخص {metric_name}:**\n\n"
             f"میزان تجویز شما در شاخص **{metric_name}** با میانگین استاندارد درمانگاه فاصله دارد."
         )
 
@@ -255,6 +255,7 @@ if not st.session_state.logged_in:
                     st.rerun()
                 else:
                     st.error("رمز عبور اشتباه است.")
+                    
 ------------ پنل مدیریت و پزشک ------------------
 else:
     with st.sidebar:
