@@ -4,38 +4,80 @@ import plotly.express as px
 import os
 import json
 import re
+import time
+import shutil
+
+# ------------------ تنظیمات اولیه و پوشه‌بندی ------------------
+st.set_page_config(page_title="سیستم جامع ارزیابی و تایم‌لاین نسخ درمانگاه", layout="wide")
+
+PERIODS_DIR = "periods_data"
+SETTINGS_FILE = "system_settings.json"
+
+def init_storage():
+    """ایجاد ساختار پوشه‌ها و فایل‌های پایه"""
+    if not os.path.exists(PERIODS_DIR):
+        os.makedirs(PERIODS_DIR)
+
+init_storage()
 
 # ------------------ تابع هوشمند پاکسازی و تطبیق اسامی ------------------
 def clean_name(text):
-    """
-    پاکسازی پیشوندها، یکسان‌سازی حروف فارسی و حذف فاصله‌های اضافی.
-    مثال: 'دکتر جواد پژوه فام' -> 'جواد پژوه فام'
-    مثال: 'آقای دکتر جواد پژوه فام' -> 'جواد پژوه فام'
-    """
     if not text or pd.isna(text):
         return ""
     text = str(text).strip()
-    # یکسان‌سازی حروف ی و ک
     text = text.replace('ي', 'ی').replace('ك', 'ک')
     
-    # الگوی شناسایی پیشوندهای رایج
     prefix_pattern = r'^(دکتر|خانم|آقای|آقا|اقای|مهندس|پزشک)\b\s*'
-    
-    # پاکسازی متوالی برای پیشوندهای چندگانه (مانند "خانم دکتر ...")
     while re.search(prefix_pattern, text, flags=re.IGNORECASE):
         text = re.sub(prefix_pattern, '', text, flags=re.IGNORECASE).strip()
         
-    # حذف فاصله‌های اضافی بین نام و نام خانوادگی
     return " ".join(text.split())
 
-st.set_page_config(page_title="سیستم ارزیابی نسخ درمانگاه", layout="wide")
+# ------------------ مدیریت متادیتای دوره‌ها ------------------
+META_FILE = os.path.join(PERIODS_DIR, "periods_meta.json")
 
-# مسیرهای ذخیره‌سازی دائمی
-DATA_FILE = "saved_clinic_data.xlsx"
-DRUG_DATA_FILE = "saved_drug_data.xlsx"
-SETTINGS_FILE = "system_settings.json"
+def get_periods_meta():
+    if os.path.exists(META_FILE):
+        try:
+            with open(META_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
 
-# ------------------ توابع ذخیره‌سازی و بازیابی داده‌ها ------------------
+def save_periods_meta(meta_data):
+    with open(META_FILE, "w", encoding="utf-8") as f:
+        json.dump(meta_data, f, ensure_ascii=False, indent=4)
+
+def create_period(period_name):
+    periods = get_periods_meta()
+    period_id = f"p_{int(time.time() * 1000)}"
+    new_period = {
+        "id": period_id,
+        "name": period_name,
+        "created_at": time.time(),
+        "created_date": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")
+    }
+    periods.append(new_period)
+    save_periods_meta(periods)
+    
+    p_dir = os.path.join(PERIODS_DIR, period_id)
+    os.makedirs(p_dir, exist_ok=True)
+    return period_id
+
+def delete_period(period_id):
+    periods = get_periods_meta()
+    periods = [p for p in periods if p["id"] != period_id]
+    save_periods_meta(periods)
+    
+    p_dir = os.path.join(PERIODS_DIR, period_id)
+    if os.path.exists(p_dir):
+        shutil.rmtree(p_dir)
+
+def get_period_file_path(period_id, file_type):
+    """file_type can be 'main' or 'drugs'"""
+    return os.path.join(PERIODS_DIR, period_id, f"{file_type}.xlsx")
+
 def save_settings():
     settings = {
         "passwords": st.session_state.doctor_passwords,
@@ -80,12 +122,10 @@ def calculate_ranks(df, metrics):
         df_ranks[col] = ranks.fillna(0).astype(int)
     return df_ranks
 
-# ------------------ توابع دسته‌بندی و فیلتر هوشمند داروها ------------------
+# ------------------ توابع دسته‌بندی و فیلتر داروها ------------------
 def classify_drug(drug_name):
-    """تحلیل و دسته‌بندی هوشمند دارو بر اساس نام و شکل دارویی"""
     name_lower = str(drug_name).strip().lower()
     
-    # شناسایی موارد موضعی، ژل و قطره جهت استثنا کردن از فیلترهای تخصصی
     exclude_keywords = ['oint', 'ointment', 'پماد', 'gel', 'ژل', 'drop', 'drops', 'قطره']
     is_excluded_form = any(k in name_lower for k in exclude_keywords)
     
@@ -155,7 +195,6 @@ def filter_drug_list(drugs_list, category):
             result.append(d)
     return result
 
-# ------------------ توابع راهنمای بالینی ------------------
 def get_clinical_guideline(metric_name, user_val, avg_val):
     metric_lower = metric_name.lower()
     if any(kw in metric_lower for kw in ['آنتی', 'بیوتیک', 'چرك', 'عفونت', 'کپسول']):
@@ -180,13 +219,15 @@ def get_clinical_guideline(metric_name, user_val, avg_val):
             f"میزان تجویز شما در شاخص **{metric_name}** با میانگین استاندارد درمانگاه فاصله دارد."
         )
 
-# ------------------ مدیریت وضعیت نشست (Session State) ------------------
+# ------------------ وضعیت نشست (Session State) ------------------
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'user_role' not in st.session_state:
     st.session_state.user_role = None
 if 'doctor_name' not in st.session_state:
     st.session_state.doctor_name = None
+if 'active_period_id' not in st.session_state:
+    st.session_state.active_period_id = None
 if 'doctor_passwords' not in st.session_state:
     st.session_state.doctor_passwords = {}
 if 'admin_general_notes' not in st.session_state:
@@ -198,39 +239,28 @@ if 'metric_settings' not in st.session_state:
 
 load_settings()
 
-# بارگذاری اولیه فایل شاخص‌های کلی
-if 'df' not in st.session_state or st.session_state.df is None:
-    if os.path.exists(DATA_FILE):
-        try:
-            df_init = pd.read_excel(DATA_FILE)
-            doc_c = df_init.columns[0]
-            df_init[doc_c] = df_init[doc_c].apply(clean_name)
-            st.session_state.df = df_init
-        except Exception:
-            st.session_state.df = None
-    else:
-        st.session_state.df = None
-
-# بارگذاری اولیه فایل اقلام دارویی
-if 'df_drugs' not in st.session_state or st.session_state.df_drugs is None:
-    if os.path.exists(DRUG_DATA_FILE):
-        try:
-            df_d_init = pd.read_excel(DRUG_DATA_FILE)
-            doc_c = df_d_init.columns[0]
-            df_d_init[doc_c] = df_d_init[doc_c].apply(clean_name)
-            st.session_state.df_drugs = df_d_init
-        except Exception:
-            st.session_state.df_drugs = None
-    else:
-        st.session_state.df_drugs = None
-
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
 DOCTOR_DEFAULT_PASSWORD = "1234"
 
+# گزینه‌های فیلتر دارویی
+filter_options = [
+    "همه اشکال", 
+    "خوراکی (Tab, Cap, Syru, Susp)", 
+    "تزریقی عمومی (Inj, Infusion, Solution)",
+    "فقط تزریقی (Inj)",
+    "آنتی‌بیوتیک‌ها (بدون Oint, Gel, Drop)",
+    "مسکن‌های NSAID (بدون Oint, Gel, Drop)",
+    "کورتیکواستروئیدها (بدون Oint, Gel, Drop)",
+    "مجموع آنتی‌بیوتیک‌ها",
+    "مجموع تزریقی‌ها",
+    "مجموع کورتیکواستروئیدها",
+    "مجموع NSAIDها"
+]
+
 # ------------------ صفحه ورود (Login Screen) ------------------
 if not st.session_state.logged_in:
-    st.title("🔑 ورود به سیستم ارزیابی نسخ درمانگاه")
+    st.title("🔑 ورود به سیستم جامع ارزیابی و تایم‌لاین نسخ درمانگاه")
     login_type = st.radio("نوع ورود را انتخاب کنید:", ["ورود پزشک 👤", "ورود مدیر / ادمین 🛠️"], horizontal=True)
     st.markdown("---")
     
@@ -249,25 +279,15 @@ if not st.session_state.logged_in:
                 st.error("نام کاربری یا رمز عبور ادمین اشتباه است.")
     else:
         st.subheader("ورود اختصاصی پزشک")
-        if st.session_state.df is not None:
-            df = st.session_state.df
-            doctor_col = df.columns[0]
-            doctors_list = df[doctor_col].dropna().unique().tolist()
-            selected_doc = st.selectbox("نام خود را انتخاب کنید:", doctors_list)
-        else:
-            st.info("ℹ️ اطلاعات درمانگاه هنوز توسط مدیر بارگذاری نشده است.")
-            selected_doc = st.text_input("نام و نام خانوادگی پزشک:")
-            
+        selected_doc = st.text_input("نام و نام خانوادگی پزشک (مثلاً: جواد پژوه فام):")
         doc_password = st.text_input("رمز عبور اختصاصی (پیش‌فرض: 1234)", type="password")
         
         if st.button("ورود به پنل پزشک", type="primary"):
             target_doc = clean_name(selected_doc)
-            
             if not target_doc:
-                st.error("لطفاً نام خود را مشخص کنید.")
+                st.error("لطفاً نام خود را وارد کنید.")
             else:
                 expected_password = st.session_state.doctor_passwords.get(target_doc, DOCTOR_DEFAULT_PASSWORD)
-                
                 if doc_password == expected_password:
                     st.session_state.logged_in = True
                     st.session_state.user_role = "doctor"
@@ -277,249 +297,390 @@ if not st.session_state.logged_in:
                 else:
                     st.error("رمز عبور اشتباه است.")
 
-# ------------------ پنل مدیریت و پزشک ------------------
+# ------------------ پنل اصلی پس از ورود ------------------
 else:
+    periods_meta = get_periods_meta()
+    # مرتب‌سازی دوره‌ها بر اساس زمان ساخت (قدیمی به جدید برای حق تقدم در تایم‌لاین)
+    periods_meta = sorted(periods_meta, key=lambda x: x.get("created_at", 0))
+
     with st.sidebar:
-        st.write(f"👤 **کاربر متصل:** {st.session_state.doctor_name if st.session_state.user_role == 'doctor' else 'مدیر سیستم'}")
+        st.write(f"👤 **کاربر:** {st.session_state.doctor_name if st.session_state.user_role == 'doctor' else 'مدیر سیستم'}")
         st.write(f"پست: {'پزشک' if st.session_state.user_role == 'doctor' else 'مدیر ارشد'}")
+        st.markdown("---")
+        
+        if st.session_state.active_period_id:
+            active_p_info = next((p for p in periods_meta if p["id"] == st.session_state.active_period_id), None)
+            if active_p_info:
+                st.success(f"📌 **دوره فعال:** {active_p_info['name']}")
+                if st.button("🔙 خروج از دوره / بازگشت به تایم‌لاین"):
+                    st.session_state.active_period_id = None
+                    st.rerun()
+            st.markdown("---")
+
         if st.button("خروج از حساب کاربری 🚪"):
             st.session_state.logged_in = False
             st.session_state.user_role = None
             st.session_state.doctor_name = None
+            st.session_state.active_period_id = None
             st.rerun()
 
-    # گزینه های کامل فیلترهای دارویی
-    filter_options = [
-        "همه اشکال", 
-        "خوراکی (Tab, Cap, Syru, Susp)", 
-        "تزریقی عمومی (Inj, Infusion, Solution)",
-        "فقط تزریقی (Inj)",
-        "آنتی‌بیوتیک‌ها (بدون Oint, Gel, Drop)",
-        "مسکن‌های NSAID (بدون Oint, Gel, Drop)",
-        "کورتیکواستروئیدها (بدون Oint, Gel, Drop)",
-        "مجموع آنتی‌بیوتیک‌ها",
-        "مجموع تزریقی‌ها",
-        "مجموع کورتیکواستروئیدها",
-        "مجموع NSAIDها"
-    ]
-
-    # -------------------------------------------------------------
-    # ۱. بخش دسترسی مدیر (ADMIN)
-    # -------------------------------------------------------------
+    # =============================================================
+    # ۱. بخش مدیر سیستم (ADMIN)
+    # =============================================================
     if st.session_state.user_role == "admin":
-        st.title("🛠️ پنل مدیریت و ارزیابی کل درمانگاه")
-
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-            "📈 مقایسه کل پزشکان", 
-            "👤 بررسی فردی پزشکان", 
-            "💊 درصد دارو به پزشک", 
-            "📋 دارو به نسخه",
-            "⚙️ تنظیمات سطوح شاخص‌ها",
-            "📝 بازخورد و توصیه‌های مدیریت", 
-            "💾 خروجی PDF"
-        ])
-
-        # --- تب ۱: مقایسه کل ---
-        with tab1:
-            st.header("📁 بارگذاری فایل شاخص‌های کلی درمانگاه")
-            if os.path.exists(DATA_FILE):
-                st.info("💡 فایل شاخص‌ها از قبل در سیستم ذخیره شده است.")
-            uploaded_file = st.file_uploader("آپلود فایل اکسل عمومی شاخص‌ها", type=["xlsx", "xls"], key="main_excel_uploader")
+        
+        # ------------------ حالت A: انتخاب یا مدیریت دوره (صفحه اول ادمین) ------------------
+        if not st.session_state.active_period_id:
+            st.title("🗓️ صفحه مدیریت دوره‌ها و تحلیل تایم‌لاین (Timeline)")
             
-            if uploaded_file is not None:
-                try:
-                    df_new = pd.read_excel(uploaded_file)
-                except Exception:
-                    uploaded_file.seek(0)
-                    df_new = pd.read_html(uploaded_file)[0]
-                
-                # پاکسازی هوشمند اسامی پزشکان در فایل اکسل جدید
-                doc_col_name = df_new.columns[0]
-                df_new[doc_col_name] = df_new[doc_col_name].apply(clean_name)
-                
-                st.session_state.df = df_new
-                df_new.to_excel(DATA_FILE, index=False)
-                st.success("فایل با موفقیت بارگذاری، پاکسازی اسامی و ذخیره شد.")
+            tab_manage, tab_timeline = st.tabs(["📂 انتخاب و ایجاد دوره ارزیابی", "📈 تایم‌لاین و تحلیل روند (Timeline)"])
 
-            if st.session_state.df is not None:
-                df = st.session_state.df
-                doctor_col = df.columns[0]
-                metrics = df.columns[1:]
-                df_ranks = calculate_ranks(df, metrics)
+            # --- تب مدیریت و انتخاب دوره ---
+            with tab_manage:
+                col_left, col_right = st.columns([1, 1])
 
-                st.subheader("مقایسه کلی تمام پزشکان")
-                selected_metric = st.selectbox("انتخاب شاخص:", metrics)
-                fig_bar = px.bar(df, x=doctor_col, y=selected_metric, text_auto=True, color=selected_metric, color_continuous_scale="Viridis")
-                st.plotly_chart(fig_bar, use_container_width=True)
-                st.subheader("جدول رتبه‌بندی کلی")
-                st.dataframe(df_ranks.set_index(doctor_col))
+                with col_left:
+                    st.subheader("➕ ایجاد دوره جدید")
+                    st.markdown("یک عنوان اختصاصی برای دوره جدید وارد کنید (مثلاً: **شهریور 1405**):")
+                    new_p_name = st.text_input("نام دوره جدید", placeholder="مثال: شهریور 1405")
+                    if st.button("🚀 ساخت و ورود به دوره جدید", type="primary"):
+                        if new_p_name.strip():
+                            new_id = create_period(new_p_name.strip())
+                            st.session_state.active_period_id = new_id
+                            st.success(f"دوره «{new_p_name}» با موفقیت ساخته شد.")
+                            st.rerun()
+                        else:
+                            st.error("لطفاً نام دوره را وارد کنید.")
 
-        # --- تب ۲: بررسی فردی ---
-        with tab2:
-            if st.session_state.df is not None:
-                df = st.session_state.df
-                doctor_col = df.columns[0]
-                metrics = df.columns[1:]
-                df_ranks = calculate_ranks(df, metrics)
-                doctors_list = df[doctor_col].dropna().unique().tolist()
-                
-                selected_doc = st.selectbox("انتخاب پزشک جهت بررسی:", doctors_list)
-                doc_data = df[df[doctor_col] == selected_doc].iloc[0]
-                doc_ranks = df_ranks[df_ranks[doctor_col] == selected_doc].iloc[0]
-                
-                st.subheader(f"کارنامه کامل: {selected_doc}")
-                cols = st.columns(2)
-                for i, metric in enumerate(metrics):
-                    with cols[i % 2]:
-                        st.metric(label=metric, value=f"{doc_data[metric]}", delta=f"رتبه {doc_ranks[metric]} از {len(df)}")
+                with col_right:
+                    st.subheader("📋 ورود به دوره‌های موجود")
+                    if not periods_meta:
+                        st.info("هنوز هیچ دوره‌ای ثبت نشده است. از کادر سمت راست دوره جدید بسازید.")
+                    else:
+                        p_options = {p["name"]: p["id"] for p in periods_meta}
+                        selected_p_name = st.selectbox("یک دوره را جهت بررسی یا اصلاح انتخاب کنید:", list(p_options.keys()))
+                        
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("🔑 ورود به دوره انتخاب شده", type="primary"):
+                                st.session_state.active_period_id = p_options[selected_p_name]
+                                st.rerun()
+                        with c2:
+                            with st.popover("🗑️ حذف این دوره"):
+                                st.warning(f"آیا از حذف کامل دوره «{selected_p_name}» مطمئن هستید؟ تمام فایل‌های این دوره پاک خواهند شد.")
+                                if st.button("بله، دوره حذف شود", type="secondary"):
+                                    delete_period(p_options[selected_p_name])
+                                    st.success("دوره با موفقیت حذف شد.")
+                                    st.rerun()
 
-        # --- تب ۳: درصد دارو به پزشک ---
-        with tab3:
-            st.header("💊 سهم و درصد تجویز داروها به تفکیک پزشک")
-            st.markdown("فایل اکسل شامل ۳ ستون: **۱. نام پزشک** | **۲. نام و شکل دارو** | **۳. تعداد تجویزی** را آپلود کنید.")
+            # --- تب تایم‌لاین و بررسی روند دوره‌ها ---
+            with tab_timeline:
+                st.header("📊 مقایسه روند عملکرد در طول زمان (Timeline)")
+                st.markdown("در این بخش می‌توانید چندین دوره را انتخاب کرده و روند تغییرات شاخص‌ها را مقایسه کنید. (حق تقدم زمانی: دوره‌های قدیمی‌تر در سمت چپ قرار می‌گیرند).")
 
-            if os.path.exists(DRUG_DATA_FILE):
-                st.info("💡 فایل اقلام دارویی از قبل در سیستم ذخیره شده است.")
-
-            uploaded_drug_file = st.file_uploader("بارگذاری فایل اکسل اقلام دارویی", type=["xlsx", "xls"], key="drug_excel_uploader")
-
-            if uploaded_drug_file is not None:
-                try:
-                    df_d_new = pd.read_excel(uploaded_drug_file)
-                except Exception:
-                    uploaded_drug_file.seek(0)
-                    df_d_new = pd.read_html(uploaded_drug_file)[0]
-
-                # پاکسازی هوشمند اسامی پزشکان در فایل اقلام دارویی
-                doc_col_d = df_d_new.columns[0]
-                df_d_new[doc_col_d] = df_d_new[doc_col_d].apply(clean_name)
-
-                st.session_state.df_drugs = df_d_new
-                df_d_new.to_excel(DRUG_DATA_FILE, index=False)
-                st.success("فایل اقلام دارویی با موفقیت پاکسازی و ذخیره شد.")
-
-            if st.session_state.df_drugs is not None:
-                df_d = st.session_state.df_drugs.copy()
-                doc_c = df_d.columns[0]
-                drug_c = df_d.columns[1]
-                qty_c = df_d.columns[2]
-
-                df_d[qty_c] = pd.to_numeric(df_d[qty_c], errors='coerce').fillna(0)
-                df_d[drug_c] = df_d[drug_c].astype(str).str.strip()
-
-                drug_totals = df_d.groupby(drug_c)[qty_c].sum()
-                valid_drugs = drug_totals[drug_totals > 0].index.tolist()
-                df_filtered = df_d[df_d[drug_c].isin(valid_drugs)].copy()
-
-                if len(valid_drugs) == 0:
-                    st.warning("هیچ دارویی با مجموع تجویز بیشتر از صفر یافت نشد.")
+                if len(periods_meta) < 2:
+                    st.info("💡 برای مشاهده تایم‌لاین و نمودارهای مقایسه‌ای روند، حداقل نیاز به ۲ دوره بارگذاری‌شده دارید.")
                 else:
-                    form_filter = st.radio("🔍 انتخاب فیلتر دسته‌بندی دارویی:", filter_options, horizontal=True, key="filter_tab3")
-                    is_total_mode = form_filter in ["مجموع آنتی‌بیوتیک‌ها", "مجموع تزریقی‌ها", "مجموع کورتیکواستروئیدها", "مجموع NSAIDها"]
+                    all_period_names = [p["name"] for p in periods_meta]
                     
-                    selectable_drugs = filter_drug_list(valid_drugs, form_filter)
+                    c_start, c_end = st.columns(2)
+                    with c_start:
+                        start_p_name = st.selectbox("از دوره (شروع):", all_period_names, index=0)
+                    with c_end:
+                        end_p_name = st.selectbox("تا دوره (پایان):", all_period_names, index=len(all_period_names)-1)
 
-                    if not selectable_drugs:
-                        st.info("دارویی در دسته انتخابی یافت نشد.")
+                    idx_start = all_period_names.index(start_p_name)
+                    idx_end = all_period_names.index(end_p_name)
+
+                    if idx_start > idx_end:
+                        st.error("دوره شروع نباید بعد از دوره پایان باشد.")
                     else:
-                        if is_total_mode:
-                            st.info(f"💡 **حالت تجمعی فعال است:** مجموع کل {len(selectable_drugs)} قلم داروی شناسایی‌شده در دسته «{form_filter}» محاسبه شد.")
-                            drug_df = df_filtered[df_filtered[drug_c].isin(selectable_drugs)]
-                            target_title = form_filter
+                        selected_periods_in_range = periods_meta[idx_start : idx_end + 1]
+                        st.success(f"دوران انتخاب‌شده ({len(selected_periods_in_range)} دوره): " + " ⬅️ ".join([p["name"] for p in selected_periods_in_range]))
+
+                        # جمع‌آوری داده‌های شاخص اصلی از دوره‌های انتخابی
+                        timeline_records = []
+                        all_metrics_set = set()
+
+                        for p in selected_periods_in_range:
+                            main_path = get_period_file_path(p["id"], "main")
+                            if os.path.exists(main_path):
+                                try:
+                                    df_p = pd.read_excel(main_path)
+                                    doc_col = df_p.columns[0]
+                                    df_p[doc_col] = df_p[doc_col].apply(clean_name)
+                                    metrics_p = df_p.columns[1:]
+                                    
+                                    for m in metrics_p:
+                                        all_metrics_set.add(m)
+                                        for _, row in df_p.iterrows():
+                                            val = pd.to_numeric(row[m], errors='coerce')
+                                            if not pd.isna(val):
+                                                timeline_records.append({
+                                                    "دوره": p["name"],
+                                                    "پزشک": row[doc_col],
+                                                    "شاخص": m,
+                                                    "مقدار": val,
+                                                    "timestamp": p["created_at"]
+                                                })
+                                except Exception:
+                                    pass
+
+                        if not timeline_records:
+                            st.warning("هیچ فایلی در دوره‌های انتخابی برای استخراج تایم‌لاین پیدا نشد.")
                         else:
-                            selected_drug = st.selectbox("🔍 داروی مورد نظر را انتخاب یا سرچ کنید:", selectable_drugs, key="select_drug_tab3")
-                            if selected_drug:
-                                drug_df = df_filtered[df_filtered[drug_c] == selected_drug]
-                                target_title = selected_drug
+                            df_timeline = pd.DataFrame(timeline_records)
+                            metrics_list = sorted(list(all_metrics_set))
+
+                            selected_timeline_metric = st.selectbox("📌 انتخاب شاخص جهت بررسی روند تایم‌لاین:", metrics_list)
+                            df_metric = df_timeline[df_timeline["شاخص"] == selected_timeline_metric]
+
+                            chart_type = st.radio("نوع نمودار مقایسه‌ای:", ["نمودار خطی روند (Line Chart)", "نمودار میله‌ای گروهی (Bar Chart)"], horizontal=True)
+
+                            if chart_type == "نمودار خطی روند (Line Chart)":
+                                fig_timeline = px.line(
+                                    df_metric,
+                                    x="دوره",
+                                    y="مقدار",
+                                    color="پزشک",
+                                    markers=True,
+                                    title=f"روند تغییرات شاخص «{selected_timeline_metric}» در طول زمان",
+                                    labels={"مقدار": selected_timeline_metric, "دوره": "دوره ارزیابی"}
+                                )
                             else:
-                                drug_df = None
+                                fig_timeline = px.bar(
+                                    df_metric,
+                                    x="دوره",
+                                    y="مقدار",
+                                    color="پزشک",
+                                    barmode="group",
+                                    title=f"مقایسه میله‌ای شاخص «{selected_timeline_metric}» در دوره‌ها",
+                                    labels={"مقدار": selected_timeline_metric, "دوره": "دوره ارزیابی"}
+                                )
 
-                        if drug_df is not None and not drug_df.empty:
-                            doc_grouped = drug_df.groupby(doc_c)[qty_c].sum().reset_index()
-                            doc_grouped = doc_grouped[doc_grouped[qty_c] > 0]
-                            
-                            total_drug_qty = doc_grouped[qty_c].sum()
-                            doc_grouped['درصد'] = (doc_grouped[qty_c] / total_drug_qty) * 100
-                            doc_grouped['برچسب_نمودار'] = doc_grouped.apply(lambda r: f"{int(r[qty_c])} عدد ({r['درصد']:.1f}%)", axis=1)
+                            fig_timeline.update_layout(xaxis_type='category')
+                            st.plotly_chart(fig_timeline, use_container_width=True)
 
-                            st.markdown("---")
-                            st.subheader(f"📊 سهم تجویز: `{target_title}`")
-
-                            fig_drug = px.bar(
-                                doc_grouped,
-                                x=doc_c,
-                                y=qty_c,
-                                text='برچسب_نمودار',
-                                labels={doc_c: 'نام پزشک', qty_c: 'فراوانی تجویز (تعداد)'},
-                                color=qty_c,
-                                color_continuous_scale='Blues',
-                                title=f"توزیع درصد و تعداد تجویز {target_title} بین پزشکان"
+                            # میانگین درمانگاه در طول زمان
+                            st.subheader("📉 روند میانگین کل درمانگاه در طول زمان")
+                            df_clinic_avg = df_metric.groupby("دوره")["مقدار"].mean().reset_index()
+                            fig_avg = px.line(
+                                df_clinic_avg,
+                                x="دوره",
+                                y="مقدار",
+                                markers=True,
+                                title=f"میانگین کل درمانگاه در شاخص «{selected_timeline_metric}»",
+                                labels={"مقدار": "میانگین درمانگاه"}
                             )
-                            fig_drug.update_traces(textposition='outside')
-                            fig_drug.update_layout(yaxis_title="تعداد تجویزی", xaxis_title="نام پزشک")
-                            st.plotly_chart(fig_drug, use_container_width=True)
+                            fig_avg.update_traces(line_color="red", line_width=3)
+                            fig_avg.update_layout(xaxis_type='category')
+                            st.plotly_chart(fig_avg, use_container_width=True)
 
-                            st.metric(
-                                label=f"📦 مجموع کل تعداد تجویزی {target_title} در درمانگاه",
-                                value=f"{int(total_drug_qty):,} عدد"
-                            )
-            else:
-                st.warning("⚠️ هنوز هیچ فایل اکسلی برای اقلام دارویی بارگذاری نشده است.")
+        # ------------------ حالت B: مدیریت داخل یک دوره مشخص ------------------
+        else:
+            active_p_id = st.session_state.active_period_id
+            active_p_info = next((p for p in periods_meta if p["id"] == active_p_id), None)
+            p_name = active_p_info["name"] if active_p_info else "نامشخص"
 
-        # --- تب ۴: دارو به نسخه / ویزیت ---
-        with tab4:
-            st.header("📋 میزان تجویز هر دارو به ازای هر ویزیت پزشک")
-            st.markdown("محاسبه نسبت مجموع داروی تجویز شده به تعداد کل ویزیت‌های هر پزشک (**اکسل ۱:** نام پزشک + تعداد ویزیت | **اکسل ۲:** نام پزشک + نام دارو + تعداد تجویزی)")
+            st.title(f"📊 مدیریت دوره: `{p_name}`")
+            st.info("💡 فایل‌های بارگذاری‌شده در این تب‌ها اختصاصاً متعلق به این دوره هستند. بارگذاری جدید فایل‌ها، اطلاعات قبلی همین دوره را به‌روزرسانی (Override) می‌کند.")
 
-            if st.session_state.df is None or st.session_state.df_drugs is None:
-                st.error("⚠️ لطفا ابتدا هر دو فایل اکسل (شاخص‌های کل و اقلام دارویی) را بارگذاری کنید.")
-            else:
-                df_main = st.session_state.df.copy()
-                doc_col_main = df_main.columns[0]
+            main_file_path = get_period_file_path(active_p_id, "main")
+            drugs_file_path = get_period_file_path(active_p_id, "drugs")
+
+            df_main = None
+            if os.path.exists(main_file_path):
+                try:
+                    df_main = pd.read_excel(main_file_path)
+                    df_main[df_main.columns[0]] = df_main[df_main.columns[0]].apply(clean_name)
+                except Exception:
+                    pass
+
+            df_drugs = None
+            if os.path.exists(drugs_file_path):
+                try:
+                    df_drugs = pd.read_excel(drugs_file_path)
+                    df_drugs[df_drugs.columns[0]] = df_drugs[df_drugs.columns[0]].apply(clean_name)
+                except Exception:
+                    pass
+
+            tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+                "📁 بارگذاری فایل‌های دوره", 
+                "📈 مقایسه کل پزشکان", 
+                "👤 بررسی فردی پزشکان", 
+                "💊 درصد دارو به پزشک", 
+                "📋 دارو به نسخه/ویزیت",
+                "⚙️ تنظیمات شاخص‌ها",
+                "📝 بازخوردهای مدیریت"
+            ])
+
+            # --- تب ۱: بارگذاری ---
+            with tab1:
+                st.header(f"📁 بارگذاری و جایگزینی فایل‌های دوره: {p_name}")
                 
-                visit_candidates = [c for c in df_main.columns if 'ویزیت' in c or 'نسخ' in c]
-                default_visit_col = visit_candidates[0] if visit_candidates else df_main.columns[1]
-                
-                visit_col = st.selectbox(
-                    "📌 ستون تعداد کل ویزیت‌ها را از اکسل اول تایید کنید:",
-                    options=df_main.columns[1:],
-                    index=df_main.columns[1:].tolist().index(default_visit_col) if default_visit_col in df_main.columns[1:].tolist() else 0,
-                    key="select_visit_col_tab"
-                )
+                col_u1, col_u2 = st.columns(2)
+                with col_u1:
+                    st.subheader("۱. اکسل شاخص‌های عمومی")
+                    if df_main is not None:
+                        st.success("✅ فایل شاخص‌های عمومی برای این دوره بارگذاری شده است.")
+                    up_main = st.file_uploader("بارگذاری / جایگزینی (Main Excel)", type=["xlsx", "xls"], key="up_main_period")
+                    if up_main is not None:
+                        try:
+                            df_new = pd.read_excel(up_main)
+                        except Exception:
+                            up_main.seek(0)
+                            df_new = pd.read_html(up_main)[0]
+                        df_new[df_new.columns[0]] = df_new[df_new.columns[0]].apply(clean_name)
+                        df_new.to_excel(main_file_path, index=False)
+                        st.success("فایل عمومی ذخیره/جایگزین شد.")
+                        st.rerun()
 
-                df_drugs = st.session_state.df_drugs.copy()
-                doc_col_drug = df_drugs.columns[0]
-                drug_name_col = df_drugs.columns[1]
-                drug_qty_col = df_drugs.columns[2]
+                with col_u2:
+                    st.subheader("۲. اکسل اقلام دارویی")
+                    if df_drugs is not None:
+                        st.success("✅ فایل اقلام دارویی برای این دوره بارگذاری شده است.")
+                    up_drugs = st.file_uploader("بارگذاری / جایگزینی (Drugs Excel)", type=["xlsx", "xls"], key="up_drugs_period")
+                    if up_drugs is not None:
+                        try:
+                            df_d_new = pd.read_excel(up_drugs)
+                        except Exception:
+                            up_drugs.seek(0)
+                            df_d_new = pd.read_html(up_drugs)[0]
+                        df_d_new[df_d_new.columns[0]] = df_d_new[df_d_new.columns[0]].apply(clean_name)
+                        df_d_new.to_excel(drugs_file_path, index=False)
+                        st.success("فایل اقلام دارویی ذخیره/جایگزین شد.")
+                        st.rerun()
 
-                df_drugs[drug_qty_col] = pd.to_numeric(df_drugs[drug_qty_col], errors='coerce').fillna(0)
-                df_drugs[drug_name_col] = df_drugs[drug_name_col].astype(str).str.strip()
+            # --- تب ۲: مقایسه کل ---
+            with tab2:
+                if df_main is not None:
+                    doctor_col = df_main.columns[0]
+                    metrics = df_main.columns[1:]
+                    df_ranks = calculate_ranks(df_main, metrics)
 
-                drug_totals = df_drugs.groupby(drug_name_col)[drug_qty_col].sum()
-                valid_drugs = drug_totals[drug_totals > 0].index.tolist()
-
-                if not valid_drugs:
-                    st.warning("هیچ دارویی با مجموع تجویز بیشتر از صفر در اکسل دوم یافت نشد.")
+                    st.subheader(f"مقایسه کلی تمام پزشکان ({p_name})")
+                    selected_metric = st.selectbox("انتخاب شاخص:", metrics, key="tab2_m")
+                    fig_bar = px.bar(df_main, x=doctor_col, y=selected_metric, text_auto=True, color=selected_metric, color_continuous_scale="Viridis")
+                    st.plotly_chart(fig_bar, use_container_width=True)
+                    st.subheader("جدول رتبه‌بندی کلی")
+                    st.dataframe(df_ranks.set_index(doctor_col))
                 else:
-                    form_filter = st.radio("🔍 فیلتر دسته‌بندی دارویی:", filter_options, horizontal=True, key="filter_tab_rx")
-                    is_total_mode = form_filter in ["مجموع آنتی‌بیوتیک‌ها", "مجموع تزریقی‌ها", "مجموع کورتیکواستروئیدها", "مجموع NSAIDها"]
+                    st.warning("لطفاً ابتدا فایل شاخص‌های عمومی را در تب اول بارگذاری کنید.")
 
+            # --- تب ۳: بررسی فردی ---
+            with tab3:
+                if df_main is not None:
+                    doctor_col = df_main.columns[0]
+                    metrics = df_main.columns[1:]
+                    df_ranks = calculate_ranks(df_main, metrics)
+                    doctors_list = df_main[doctor_col].dropna().unique().tolist()
+                    
+                    selected_doc = st.selectbox("انتخاب پزشک جهت بررسی:", doctors_list, key="tab3_doc")
+                    doc_data = df_main[df_main[doctor_col] == selected_doc].iloc[0]
+                    doc_ranks = df_ranks[df_ranks[doctor_col] == selected_doc].iloc[0]
+                    
+                    st.subheader(f"کارنامه کامل: {selected_doc} ({p_name})")
+                    cols = st.columns(2)
+                    for i, metric in enumerate(metrics):
+                        with cols[i % 2]:
+                            st.metric(label=metric, value=f"{doc_data[metric]}", delta=f"رتبه {doc_ranks[metric]} از {len(df_main)}")
+                else:
+                    st.warning("فایل شاخص‌های عمومی بارگذاری نشده است.")
+
+            # --- تب ۴: درصد دارو به پزشک ---
+            with tab4:
+                st.header("💊 سهم و درصد تجویز داروها به تفکیک پزشک")
+                if df_drugs is not None:
+                    df_d = df_drugs.copy()
+                    doc_c = df_d.columns[0]
+                    drug_c = df_d.columns[1]
+                    qty_c = df_d.columns[2]
+
+                    df_d[qty_c] = pd.to_numeric(df_d[qty_c], errors='coerce').fillna(0)
+                    df_d[drug_c] = df_d[drug_c].astype(str).str.strip()
+
+                    drug_totals = df_d.groupby(drug_c)[qty_c].sum()
+                    valid_drugs = drug_totals[drug_totals > 0].index.tolist()
+                    df_filtered = df_d[df_d[drug_c].isin(valid_drugs)].copy()
+
+                    if not valid_drugs:
+                        st.warning("هیچ دارویی با مجموع تجویز بیشتر از صفر یافت نشد.")
+                    else:
+                        form_filter = st.radio("🔍 انتخاب فیلتر دسته‌بندی دارویی:", filter_options, horizontal=True, key="filter_tab4_p")
+                        is_total_mode = form_filter in ["مجموع آنتی‌بیوتیک‌ها", "مجموع تزریقی‌ها", "مجموع کورتیکواستروئیدها", "مجموع NSAIDها"]
+                        selectable_drugs = filter_drug_list(valid_drugs, form_filter)
+
+                        if not selectable_drugs:
+                            st.info("دارویی در دسته انتخابی یافت نشد.")
+                        else:
+                            if is_total_mode:
+                                st.info(f"💡 مجموع کل {len(selectable_drugs)} قلم داروی شناسایی‌شده در دسته «{form_filter}» محاسبه شد.")
+                                drug_df = df_filtered[df_filtered[drug_c].isin(selectable_drugs)]
+                                target_title = form_filter
+                            else:
+                                selected_drug = st.selectbox("🔍 داروی مورد نظر را انتخاب یا سرچ کنید:", selectable_drugs, key="select_drug_tab4_p")
+                                if selected_drug:
+                                    drug_df = df_filtered[df_filtered[drug_c] == selected_drug]
+                                    target_title = selected_drug
+                                else:
+                                    drug_df = None
+
+                            if drug_df is not None and not drug_df.empty:
+                                doc_grouped = drug_df.groupby(doc_c)[qty_c].sum().reset_index()
+                                doc_grouped = doc_grouped[doc_grouped[qty_c] > 0]
+                                
+                                total_drug_qty = doc_grouped[qty_c].sum()
+                                doc_grouped['درصد'] = (doc_grouped[qty_c] / total_drug_qty) * 100
+                                doc_grouped['برچسب_نمودار'] = doc_grouped.apply(lambda r: f"{int(r[qty_c])} عدد ({r['درصد']:.1f}%)", axis=1)
+
+                                fig_drug = px.bar(
+                                    doc_grouped,
+                                    x=doc_c,
+                                    y=qty_c,
+                                    text='برچسب_نمودار',
+                                    color=qty_c,
+                                    color_continuous_scale='Blues',
+                                    title=f"توزیع درصد و تعداد تجویز {target_title} بین پزشکان در دوره {p_name}"
+                                )
+                                fig_drug.update_traces(textposition='outside')
+                                st.plotly_chart(fig_drug, use_container_width=True)
+                else:
+                    st.warning("فایل اقلام دارویی برای این دوره بارگذاری نشده است.")
+
+            # --- تب ۵: دارو به ویزیت ---
+            with tab5:
+                st.header("📋 میزان تجویز هر دارو به ازای هر ویزیت پزشک")
+                if df_main is None or df_drugs is None:
+                    st.error("⚠️ برای این محاسبه، بارگذاری هر دو فایل (عمومی و دارویی) الزامی است.")
+                else:
+                    doc_col_main = df_main.columns[0]
+                    visit_candidates = [c for c in df_main.columns if 'ویزیت' in c or 'نسخ' in c]
+                    default_visit_col = visit_candidates[0] if visit_candidates else df_main.columns[1]
+                    
+                    visit_col = st.selectbox("📌 ستون تعداد کل ویزیت‌ها:", options=df_main.columns[1:], key="visit_col_select_p")
+
+                    df_d = df_drugs.copy()
+                    doc_col_drug = df_d.columns[0]
+                    drug_name_col = df_d.columns[1]
+                    drug_qty_col = df_d.columns[2]
+
+                    df_d[drug_qty_col] = pd.to_numeric(df_d[drug_qty_col], errors='coerce').fillna(0)
+                    df_d[drug_name_col] = df_d[drug_name_col].astype(str).str.strip()
+
+                    drug_totals = df_d.groupby(drug_name_col)[drug_qty_col].sum()
+                    valid_drugs = drug_totals[drug_totals > 0].index.tolist()
+
+                    form_filter = st.radio("🔍 فیلتر دسته‌بندی دارویی:", filter_options, horizontal=True, key="filter_tab5_p")
+                    is_total_mode = form_filter in ["مجموع آنتی‌بیوتیک‌ها", "مجموع تزریقی‌ها", "مجموع کورتیکواستروئیدها", "مجموع NSAIDها"]
                     selectable_drugs = filter_drug_list(valid_drugs, form_filter)
 
-                    if not selectable_drugs:
-                        st.info("دارویی در دسته انتخابی یافت نشد.")
-                    else:
+                    if selectable_drugs:
                         if is_total_mode:
-                            st.info(f"💡 **حالت تجمعی فعال است:** مجموع کل {len(selectable_drugs)} قلم داروی شناسایی‌شده در دسته «{form_filter}» محاسبه شد.")
-                            df_selected_drug = df_drugs[df_drugs[drug_name_col].isin(selectable_drugs)].copy()
+                            df_selected_drug = df_d[df_d[drug_name_col].isin(selectable_drugs)].copy()
                             target_title = form_filter
                         else:
-                            selected_drug = st.selectbox("🔍 انتخاب دارو:", selectable_drugs, key="select_drug_tab_rx")
-                            if selected_drug:
-                                df_selected_drug = df_drugs[df_drugs[drug_name_col] == selected_drug].copy()
-                                target_title = selected_drug
-                            else:
-                                df_selected_drug = None
+                            selected_drug = st.selectbox("🔍 انتخاب دارو:", selectable_drugs, key="select_drug_tab5_p")
+                            df_selected_drug = df_d[df_d[drug_name_col] == selected_drug].copy() if selected_drug else None
 
                         if df_selected_drug is not None and not df_selected_drug.empty:
                             df_selected_drug['doc_clean'] = df_selected_drug[doc_col_drug].apply(clean_name)
@@ -531,266 +692,159 @@ else:
 
                             merged_data = pd.merge(doc_visits, doc_drug_qty, on='doc_clean', how='left')
                             merged_data[drug_qty_col] = merged_data[drug_qty_col].fillna(0)
-
-                            show_zeros = st.checkbox("نمایش پزشکان با تجویز صفر برای این گروه/دارو", value=True)
-                            if not show_zeros:
-                                merged_data = merged_data[merged_data[drug_qty_col] > 0]
-
                             merged_data = merged_data[merged_data[visit_col] > 0].copy()
 
-                            if merged_data.empty:
-                                st.warning("اطلاعاتی برای نمایش پیدا نشد.")
-                            else:
-                                merged_data['میزان_در_هر_ویزیت'] = merged_data[drug_qty_col] / merged_data[visit_col]
-                                merged_data['برچسب'] = merged_data.apply(
-                                    lambda r: f"{r['میزان_در_هر_ویزیت']:.2f} (کل: {int(r[drug_qty_col]):,} از {int(r[visit_col]):,} ویزیت)", 
-                                    axis=1
-                                )
+                            merged_data['میزان_در_هر_ویزیت'] = merged_data[drug_qty_col] / merged_data[visit_col]
+                            merged_data['برچسب'] = merged_data.apply(lambda r: f"{r['میزان_در_هر_ویزیت']:.2f} (کل: {int(r[drug_qty_col]):,} از {int(r[visit_col]):,} ویزیت)", axis=1)
 
-                                st.markdown("---")
-                                st.subheader(f"📊 نمودار تجویز `{target_title}` به ازای هر ویزیت")
-
-                                fig_bar = px.bar(
-                                    merged_data,
-                                    x='doc_clean',
-                                    y='میزان_در_هر_ویزیت',
-                                    text='برچسب',
-                                    labels={
-                                        'doc_clean': 'نام پزشک', 
-                                        'میزان_در_هر_ویزیت': 'تعداد دارو به ازای هر ویزیت'
-                                    },
-                                    color='میزان_در_هر_ویزیت',
-                                    color_continuous_scale='Tealgrn',
-                                    title=f"میزان تجویز {target_title} به ازای هر ویزیت پزشک"
-                                )
-                                fig_bar.update_traces(textposition='outside')
-                                fig_bar.update_layout(
-                                    xaxis_title="نام پزشک (محور X)",
-                                    yaxis_title="میزان تجویز به ازای هر ویزیت (محور Y)"
-                                )
-                                st.plotly_chart(fig_bar, use_container_width=True)
-
-                                st.subheader("📋 جدول جزئیات محاسبات")
-                                table_df = merged_data[['doc_clean', drug_qty_col, visit_col, 'میزان_در_هر_ویزیت']].copy()
-                                table_df.columns = ['نام پزشک', 'کل داروی تجویز شده', 'تعداد کل ویزیت‌ها', 'میزان به ازای هر ویزیت']
-                                table_df['میزان به ازای هر ویزیت'] = table_df['میزان به ازای هر ویزیت'].round(2)
-                                st.dataframe(table_df.set_index('نام پزشک'), use_container_width=True)
-
-        # --- تب ۵: تنظیمات سطوح شاخص‌ها (کمی + کیفی) ---
-        with tab5:
-            st.header("⚙️ تنظیمات سطوح و حدود استاندارد شاخص‌ها")
-            st.markdown("در این بخش می‌توانید ارزیابی شاخص‌ها را به دو روش **کیفی (نسبت به میانگین درمانگاه)** یا **کمی (اعداد ثابت/عددی)** تنظیم کنید.")
-
-            if st.session_state.df is not None:
-                df_curr = st.session_state.df
-                metrics_list = df_curr.columns[1:].tolist()
-
-                with st.form("metric_settings_form"):
-                    updated_settings = {}
-                    for metric in metrics_list:
-                        st.subheader(f"📊 شاخص: `{metric}`")
-                        m_curr = st.session_state.metric_settings.get(metric, {})
-
-                        eval_type_opts = ["کیفی (بر اساس میانگین درمانگاه)", "کمی (اعداد ثابت/عددی)"]
-                        default_eval_type = m_curr.get("eval_type", "کیفی (بر اساس میانگین درمانگاه)")
-                        eval_idx = eval_type_opts.index(default_eval_type) if default_eval_type in eval_type_opts else 0
-
-                        default_dir = m_curr.get("direction", "کمتر بهتر" if ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric) else "بیشتر بهتر")
-                        dir_opts = ["کمتر بهتر", "بیشتر بهتر"]
-                        dir_idx = dir_opts.index(default_dir) if default_dir in dir_opts else 0
-
-                        c1, c2 = st.columns(2)
-                        with c1:
-                            eval_type = st.radio(
-                                f"نوع ارزیابی شاخص",
-                                eval_type_opts,
-                                index=eval_idx,
-                                key=f"eval_type_{metric}"
+                            fig_bar = px.bar(
+                                merged_data,
+                                x='doc_clean',
+                                y='میزان_در_هر_ویزیت',
+                                text='برچسب',
+                                color='میزان_در_هر_ویزیت',
+                                color_continuous_scale='Tealgrn',
+                                title=f"میزان تجویز {target_title} به ازای هر ویزیت پزشک در دوره {p_name}"
                             )
-                        with c2:
-                            direction = st.radio(
-                                f"جهت مطلوبیت",
-                                dir_opts,
-                                index=dir_idx,
-                                key=f"dir_{metric}"
-                            )
+                            fig_bar.update_traces(textposition='outside')
+                            st.plotly_chart(fig_bar, use_container_width=True)
 
-                        ideal_val = float(m_curr.get("ideal", 0.0))
-                        std_val = float(m_curr.get("standard", 0.0))
-                        crit_val = float(m_curr.get("crit", 0.0))
-                        tolerance = float(m_curr.get("tolerance", 10.0))
+            # --- تب ۶: تنظیمات شاخص‌ها ---
+            with tab6:
+                st.header("⚙️ تنظیمات عمومی سطوح شاخص‌ها")
+                if df_main is not None:
+                    metrics_list = df_main.columns[1:].tolist()
+                    with st.form("metric_settings_form_p"):
+                        updated_settings = {}
+                        for metric in metrics_list:
+                            st.subheader(f"📊 شاخص: `{metric}`")
+                            m_curr = st.session_state.metric_settings.get(metric, {})
+                            eval_type_opts = ["کیفی (بر اساس میانگین درمانگاه)", "کمی (اعداد ثابت/عددی)"]
+                            default_eval_type = m_curr.get("eval_type", "کیفی (بر اساس میانگین درمانگاه)")
+                            eval_idx = eval_type_opts.index(default_eval_type) if default_eval_type in eval_type_opts else 0
 
-                        if eval_type == "کمی (اعداد ثابت/عددی)":
-                            col_ideal, col_std, col_crit = st.columns(3)
-                            with col_ideal:
-                                ideal_val = st.number_input(f"🌟 حد ایده‌آل", value=ideal_val, key=f"ideal_{metric}")
-                            with col_std:
-                                std_val = st.number_input(f"✅ حد استاندارد", value=std_val, key=f"std_{metric}")
-                            with col_crit:
-                                crit_val = st.number_input(f"🛑 حد بحرانی", value=crit_val, key=f"crit_{metric}")
-                        else:
-                            if direction == "کمتر بهتر":
-                                rule_text = (
-                                    f"• **🟢 ایده‌آل:** پایین‌تر از میانگین درمانگاه (کمتر از {100-tolerance:.0f}٪ میانگین)\n"
-                                    f"• **🟡 استاندارد:** هم‌تراز با میانگین درمانگاه (بین {100-tolerance:.0f}٪ تا {100+tolerance:.0f}٪ میانگین)\n"
-                                    f"• **🔴 بحرانی:** بالاتر از حد درمانگاه (بیشتر از {100+tolerance:.0f}٪ میانگین)"
-                                )
-                            else:
-                                rule_text = (
-                                    f"• **🟢 ایده‌آل:** بالاتر از میانگین درمانگاه (بیشتر از {100+tolerance:.0f}٪ میانگین)\n"
-                                    f"• **🟡 استاندارد:** هم‌تراز با میانگین درمانگاه (بین {100-tolerance:.0f}٪ تا {100+tolerance:.0f}٪ میانگین)\n"
-                                    f"• **🔴 بحرانی:** پایین‌تر از حد درمانگاه (کمتر از {100-tolerance:.0f}٪ میانگین)"
-                                )
-                            
-                            st.info(f"💡 **سطوح ارزیابی کیفی بر اساس میانگین درمانگاه:**\n\n{rule_text}")
-                            tolerance = st.number_input(f"درصد تلرانس نوسان دور میانگین برای حالت استاندارد (٪)", value=tolerance, min_value=0.0, max_value=50.0, step=1.0, key=f"tol_{metric}")
+                            default_dir = m_curr.get("direction", "کمتر بهتر" if ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric) else "بیشتر بهتر")
+                            dir_opts = ["کمتر بهتر", "بیشتر بهتر"]
+                            dir_idx = dir_opts.index(default_dir) if default_dir in dir_opts else 0
 
-                        updated_settings[metric] = {
-                            "eval_type": eval_type,
-                            "direction": direction,
-                            "ideal": ideal_val,
-                            "standard": std_val,
-                            "crit": crit_val,
-                            "tolerance": tolerance
-                        }
-                        st.markdown("---")
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                eval_type = st.radio("نوع ارزیابی", eval_type_opts, index=eval_idx, key=f"e_{metric}")
+                            with c2:
+                                direction = st.radio("جهت مطلوبیت", dir_opts, index=dir_idx, key=f"d_{metric}")
 
-                    submitted = st.form_submit_button("💾 ذخیره تنظیمات شاخص‌ها", type="primary")
-                    if submitted:
-                        st.session_state.metric_settings = updated_settings
-                        save_settings()
-                        st.success("تنظیمات حدود و سطوح شاخص‌ها با موفقیت ذخیره شد.")
-            else:
-                st.warning("⚠️ هنوز فایل اکسل شاخص‌ها بارگذاری نشده است. لطفاً ابتدا در تب ۱ فایل را آپلود کنید.")
+                            tolerance = float(m_curr.get("tolerance", 10.0))
+                            tolerance = st.number_input("درصد تلرانس دور میانگین (٪)", value=tolerance, min_value=0.0, max_value=50.0, key=f"t_{metric}")
 
-        # --- تب ۶: بازخوردها ---
-        with tab6:
-            st.header("📝 مدیریت توصیه‌ها و بازخوردهای مدیریت")
-            gen_note = st.text_area("متن پیام عمومی مدیریت:", value=st.session_state.admin_general_notes, height=100)
-            if st.button("ذخیره پیام عمومی", type="primary"):
-                st.session_state.admin_general_notes = gen_note
-                save_settings()
-                st.success("پیام عمومی ذخیره شد.")
+                            updated_settings[metric] = {
+                                "eval_type": eval_type,
+                                "direction": direction,
+                                "tolerance": tolerance
+                            }
+                        if st.form_submit_button("💾 ذخیره تنظیمات شاخص‌ها", type="primary"):
+                            st.session_state.metric_settings = updated_settings
+                            save_settings()
+                            st.success("تنظیمات با موفقیت ذخیره شد.")
 
-            st.markdown("---")
-            if st.session_state.df is not None:
-                df = st.session_state.df
-                doctors_list = df[df.columns[0]].dropna().unique().tolist()
-                selected_target_doc = st.selectbox("پزشک مورد نظر را انتخاب کنید:", doctors_list, key="admin_target_doc")
-                current_doc_note = st.session_state.admin_doctor_notes.get(clean_name(selected_target_doc), "")
-                spec_note = st.text_area(f"متن توصیه اختصاصی برای {selected_target_doc}:", value=current_doc_note, height=120)
-                if st.button(f"ذخیره توصیه اختصاصی برای {selected_target_doc}", type="primary"):
-                    st.session_state.admin_doctor_notes[clean_name(selected_target_doc)] = spec_note
+            # --- تب ۷: بازخوردهای مدیریت ---
+            with tab7:
+                st.header("📝 مدیریت توصیه‌ها و بازخوردها")
+                gen_note = st.text_area("متن پیام عمومی مدیریت:", value=st.session_state.admin_general_notes, height=100)
+                if st.button("ذخیره پیام عمومی", type="primary"):
+                    st.session_state.admin_general_notes = gen_note
                     save_settings()
-                    st.success("توصیه اختصاصی ذخیره شد.")
-
-        # --- تب ۷: PDF ---
-        with tab7:
-            st.info("برای چاپ یا ذخیره PDF گزارشات، از گزینه Print مرورگر (Ctrl+P) استفاده کنید.")
-
-    # -------------------------------------------------------------
-    # ۲. بخش دسترسی محدود پزشک (DOCTOR)
-    # -------------------------------------------------------------
-    elif st.session_state.user_role == "doctor":
-        current_doc = clean_name(st.session_state.doctor_name)
-        st.title(f"👨‍⚕️ پنل اختصاصی ارتقای عملکرد: {current_doc}")
-
-        doc_notes_dict = st.session_state.get('admin_doctor_notes', {})
-        doc_note_content = doc_notes_dict.get(current_doc, "")
-
-        has_gen_note = bool(st.session_state.get('admin_general_notes', '').strip())
-        has_doc_note = bool(doc_note_content.strip())
-
-        if has_gen_note or has_doc_note:
-            st.subheader("📮 پیام‌ها و توصیه‌های مدیریت درمانگاه")
-            if has_gen_note:
-                st.info(f"**📢 اطلاعیه عمومی مدیریت:**\n\n{st.session_state.admin_general_notes}")
-            if has_doc_note:
-                st.warning(f"**✉️ توصیه اختصاصی مدیریت برای شما ({current_doc}):**\n\n{doc_note_content}")
-            st.markdown("---")
-
-        if st.session_state.df is None:
-            st.warning("⚠️ اطلاعات درمانگاه هنوز توسط مدیر بارگذاری نشده است.")
-        else:
-            df = st.session_state.df.copy()
-            doctor_col = df.columns[0]
-            metrics = df.columns[1:]
-
-            df['doc_clean'] = df[doctor_col].apply(clean_name)
-
-            if current_doc not in df['doc_clean'].values:
-                st.error(f"❌ نام شما ({current_doc}) در فایل اکسل پیدا نشد.")
-            else:
-                doc_data = df[df['doc_clean'] == current_doc].iloc[0]
-                numeric_df = df[metrics].apply(pd.to_numeric, errors='coerce')
-                avg_data = numeric_df.mean()
-                
-                df_ranks = calculate_ranks(df, metrics)
-                df_ranks['doc_clean'] = df_ranks[doctor_col].apply(clean_name)
-                doc_ranks = df_ranks[df_ranks['doc_clean'] == current_doc].iloc[0]
-
-                st.subheader("📋 خلاصه آمار و رتبه شما در درمانگاه")
-                cols = st.columns(2)
-                metric_settings = st.session_state.get("metric_settings", {})
-
-                for i, metric in enumerate(metrics):
-                    m_dir = metric_settings.get(metric, {}).get("direction", "")
-                    if m_dir == "بیشتر بهتر":
-                        is_inverse = False
-                    elif m_dir == "کمتر بهتر":
-                        is_inverse = True
-                    else:
-                        is_inverse = ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric)
-
-                    with cols[i % 2]:
-                        st.metric(
-                            label=metric, 
-                            value=f"{doc_data[metric]}", 
-                            delta=f"رتبه {doc_ranks[metric]} از {len(df)}",
-                            delta_color="inverse" if is_inverse else "normal"
-                        )
+                    st.success("ذخیره شد.")
 
                 st.markdown("---")
-                st.subheader("⚠️ تحلیل هوشمند وضعیت تجویزی شما")
-                warnings, goods, critical_metrics = [], [], []
+                if df_main is not None:
+                    doctors_list = df_main[df_main.columns[0]].dropna().unique().tolist()
+                    selected_target_doc = st.selectbox("پزشک مورد نظر را انتخاب کنید:", doctors_list, key="target_doc_p")
+                    current_doc_note = st.session_state.admin_doctor_notes.get(clean_name(selected_target_doc), "")
+                    spec_note = st.text_area(f"متن توصیه اختصاصی برای {selected_target_doc}:", value=current_doc_note, height=120)
+                    if st.button(f"ذخیره توصیه اختصاصی برای {selected_target_doc}", type="primary"):
+                        st.session_state.admin_doctor_notes[clean_name(selected_target_doc)] = spec_note
+                        save_settings()
+                        st.success("توصیه اختصاصی ذخیره شد.")
 
-                for metric in metrics:
-                    val = pd.to_numeric(doc_data[metric], errors='coerce')
-                    if pd.isna(val):
-                        continue
-                    avg = avg_data[metric]
+    # =============================================================
+    # ۲. بخش پزشکان (DOCTOR VIEW)
+    # =============================================================
+    elif st.session_state.user_role == "doctor":
+        current_doc = clean_name(st.session_state.doctor_name)
+        st.title(f"👨‍⚕️ پنل اختصاصی پزشک: {current_doc}")
 
-                    m_set = metric_settings.get(metric, {})
-                    eval_type = m_set.get("eval_type", "کیفی (بر اساس میانگین درمانگاه)")
-                    direction = m_set.get("direction", "کمتر بهتر" if ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric) else "بیشتر بهتر")
-                    ideal = m_set.get("ideal", 0.0)
-                    std = m_set.get("standard", 0.0)
-                    crit = m_set.get("crit", 0.0)
-                    tol_percent = m_set.get("tolerance", 10.0) / 100.0
+        if not periods_meta:
+            st.warning("⚠️ هنوز هیچ دوره‌ای در سیستم توسط مدیریت ثبت نشده است.")
+        else:
+            p_options = {p["name"]: p["id"] for p in periods_meta}
+            selected_p_name_doc = st.selectbox("🗓️ انتخاب دوره ارزیابی جهت مشاهده کارنامه:", list(p_options.keys()))
+            doc_active_p_id = p_options[selected_p_name_doc]
 
-                    if eval_type == "کمی (اعداد ثابت/عددی)":
-                        if direction == "کمتر بهتر":
-                            if ideal > 0 and val <= ideal:
-                                goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** مقدار شما ({val}) در حد ایده‌آل ({ideal}) یا کمتر قرار دارد.")
-                            elif std > 0 and val <= std:
-                                goods.append(f"🟢 **عملکرد مطلوب در {metric}:** مقدار شما ({val}) در محدوده استاندارد ({std}) قرار دارد.")
-                            elif crit > 0 and val <= crit:
-                                warnings.append(f"🟡 **هشدار در {metric}:** مقدار شما ({val}) فراتر از حد استاندارد ({std}) است.")
-                            else:
-                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** مقدار شما ({val}) از حد بحرانی عبور کرده است.")
-                                critical_metrics.append((metric, val, std if std > 0 else avg))
-                        else:  # بیشتر بهتر
-                            if ideal > 0 and val >= ideal:
-                                goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** مقدار شما ({val}) در حد ایده‌آل ({ideal}) یا بیشتر قرار دارد.")
-                            elif std > 0 and val >= std:
-                                goods.append(f"🟢 **عملکرد مطلوب در {metric}:** مقدار شما ({val}) در محدوده استاندارد ({std}) قرار دارد.")
-                            elif crit > 0 and val >= crit:
-                                warnings.append(f"🟡 **هشدار در {metric}:** مقدار شما ({val}) پایین‌تر از حد استاندارد ({std}) است.")
-                            else:
-                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** مقدار شما ({val}) پایین‌تر از حد بحرانی است.")
-                                critical_metrics.append((metric, val, std if std > 0 else avg))
+            main_file_path = get_period_file_path(doc_active_p_id, "main")
 
-                    else:  # ارزیابی کیفی (بر اساس میانگین درمانگاه)
+            # بازخوردها
+            doc_notes_dict = st.session_state.get('admin_doctor_notes', {})
+            doc_note_content = doc_notes_dict.get(current_doc, "")
+            has_gen_note = bool(st.session_state.get('admin_general_notes', '').strip())
+            has_doc_note = bool(doc_note_content.strip())
+
+            if has_gen_note or has_doc_note:
+                st.subheader("📮 پیام‌ها و توصیه‌های مدیریت درمانگاه")
+                if has_gen_note:
+                    st.info(f"**📢 اطلاعیه عمومی:**\n\n{st.session_state.admin_general_notes}")
+                if has_doc_note:
+                    st.warning(f"**✉️ توصیه اختصاصی برای شما ({current_doc}):**\n\n{doc_note_content}")
+                st.markdown("---")
+
+            if not os.path.exists(main_file_path):
+                st.warning(f"⚠️ اطلاعات مربوط به دوره «{selected_p_name_doc}» هنوز کامل نشده است.")
+            else:
+                df = pd.read_excel(main_file_path)
+                doctor_col = df.columns[0]
+                metrics = df.columns[1:]
+                df['doc_clean'] = df[doctor_col].apply(clean_name)
+
+                if current_doc not in df['doc_clean'].values:
+                    st.error(f"❌ نام شما ({current_doc}) در اکسل این دوره پیدا نشد.")
+                else:
+                    doc_data = df[df['doc_clean'] == current_doc].iloc[0]
+                    numeric_df = df[metrics].apply(pd.to_numeric, errors='coerce')
+                    avg_data = numeric_df.mean()
+                    
+                    df_ranks = calculate_ranks(df, metrics)
+                    df_ranks['doc_clean'] = df_ranks[doctor_col].apply(clean_name)
+                    doc_ranks = df_ranks[df_ranks['doc_clean'] == current_doc].iloc[0]
+
+                    st.subheader(f"📋 کارنامه عملکرد شما در دوره: {selected_p_name_doc}")
+                    cols = st.columns(2)
+                    metric_settings = st.session_state.get("metric_settings", {})
+
+                    for i, metric in enumerate(metrics):
+                        m_dir = metric_settings.get(metric, {}).get("direction", "")
+                        is_inverse = (m_dir == "کمتر بهتر") or ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric)
+
+                        with cols[i % 2]:
+                            st.metric(
+                                label=metric, 
+                                value=f"{doc_data[metric]}", 
+                                delta=f"رتبه {doc_ranks[metric]} از {len(df)}",
+                                delta_color="inverse" if is_inverse else "normal"
+                            )
+
+                    st.markdown("---")
+                    st.subheader("⚠️ تحلیل هوشمند وضعیت تجویزی شما")
+                    warnings, goods, critical_metrics = [], [], []
+
+                    for metric in metrics:
+                        val = pd.to_numeric(doc_data[metric], errors='coerce')
+                        if pd.isna(val):
+                            continue
+                        avg = avg_data[metric]
+
+                        m_set = metric_settings.get(metric, {})
+                        direction = m_set.get("direction", "کمتر بهتر" if ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric) else "بیشتر بهتر")
+                        tol_percent = m_set.get("tolerance", 10.0) / 100.0
+
                         low_bound = avg * (1.0 - tol_percent)
                         high_bound = avg * (1.0 + tol_percent)
 
@@ -802,7 +856,7 @@ else:
                             else:
                                 warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** میزان تجویز شما ({val}) بالاتر از حد میانگین درمانگاه ({round(avg, 1)}) است.")
                                 critical_metrics.append((metric, val, avg))
-                        else:  # بیشتر بهتر
+                        else:
                             if val > high_bound:
                                 goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** آمار شما ({val}) بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
                             elif low_bound <= val <= high_bound:
@@ -811,24 +865,22 @@ else:
                                 warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** آمار شما ({val}) پایین‌تر از حد میانگین درمانگاه ({round(avg, 1)}) است.")
                                 critical_metrics.append((metric, val, avg))
 
-                if warnings:
-                    st.error("### موارد نیازمند بازبینی")
-                    for w in warnings:
-                        st.write(w)
-                if goods:
-                    st.success("### نقاط قوت تجویزی شما")
-                    for g in goods:
-                        st.write(g)
+                    if warnings:
+                        st.error("### موارد نیازمند بازبینی")
+                        for w in warnings:
+                            st.write(w)
+                    if goods:
+                        st.success("### نقاط قوت تجویزی شما")
+                        for g in goods:
+                            st.write(g)
 
-                st.markdown("---")
-                st.subheader("💡 توصیه‌ها و گایدلاین‌های بالینی روز دنیا (WHO / CDC)")
-                if critical_metrics:
-                    for metric, val, avg in critical_metrics:
-                        guideline_text = get_clinical_guideline(metric, val, avg)
-                        with st.expander(f"📌 راهنمای بالینی و گایدلاین علمی برای: {metric}", expanded=True):
-                            st.markdown(guideline_text)
-                else:
-                    st.success("🎉 **تبریک!** عملکرد تجویزی شما کاملاً منطبق بر استانداردهای درمانگاه و گایدلاین‌های بین‌المللی است.")
+                    if critical_metrics:
+                        st.markdown("---")
+                        st.subheader("💡 توصیه‌ها و گایدلاین‌های بالینی روز دنیا (WHO / CDC)")
+                        for metric, val, avg in critical_metrics:
+                            guideline_text = get_clinical_guideline(metric, val, avg)
+                            with st.expander(f"📌 راهنمای بالینی برای: {metric}", expanded=True):
+                                st.markdown(guideline_text)
 
         st.markdown("---")
         with st.expander("🔑 تغییر رمز عبور حساب کاربری"):
