@@ -46,7 +46,6 @@ def read_uploaded_file(uploaded_file):
             except Exception:
                 uploaded_file.seek(0)
                 try:
-                    # اکثر خروجی‌های سیستم‌های بیمه/درمانگاه در واقع HTML هستند
                     df = pd.read_html(uploaded_file)[0]
                 except Exception:
                     uploaded_file.seek(0)
@@ -99,14 +98,12 @@ def delete_period(period_id):
         shutil.rmtree(p_dir)
 
 def save_period_data(period_id, file_type, df):
-    """ذخیره فایل با فرمت پایدار CSV (با کدگذاری utf-8-sig برای پشتیبانی کامل از فارسی)"""
     p_dir = os.path.join(PERIODS_DIR, period_id)
     os.makedirs(p_dir, exist_ok=True)
     csv_path = os.path.join(p_dir, f"{file_type}.csv")
     df.to_csv(csv_path, index=False, encoding='utf-8-sig')
 
 def load_period_data(period_id, file_type):
-    """خوانش داده‌های دوره از حافظه"""
     p_dir = os.path.join(PERIODS_DIR, period_id)
     csv_path = os.path.join(p_dir, f"{file_type}.csv")
     xlsx_path = os.path.join(p_dir, f"{file_type}.xlsx")
@@ -337,7 +334,7 @@ if not st.session_state.logged_in:
                 st.error("نام کاربری یا رمز عبور ادمین اشتباه است.")
     else:
         st.subheader("ورود اختصاصی پزشک")
-        selected_doc = st.text_input("نام و نام خانوادگی پزشک (مثلاً: جواد پژوه فام):")
+        selected_doc = st.text_input("نام و نام خانوادگی پزشک:")
         doc_password = st.text_input("رمز عبور اختصاصی (پیش‌فرض: 1234)", type="password")
         
         if st.button("ورود به پنل پزشک", type="primary"):
@@ -386,7 +383,6 @@ else:
     # =============================================================
     if st.session_state.user_role == "admin":
         
-        # ------------------ حالت A: انتخاب یا مدیریت دوره ------------------
         if not st.session_state.active_period_id:
             st.title("🗓️ صفحه مدیریت دوره‌ها و تحلیل تایم‌لاین (Timeline)")
             
@@ -397,7 +393,6 @@ else:
 
                 with col_left:
                     st.subheader("➕ ایجاد دوره جدید")
-                    st.markdown("یک عنوان اختصاصی برای دوره جدید وارد کنید (مثلاً: **شهریور 1405**):")
                     new_p_name = st.text_input("نام دوره جدید", placeholder="مثال: شهریور 1405")
                     if st.button("🚀 ساخت و ورود به دوره جدید", type="primary"):
                         if new_p_name.strip():
@@ -411,7 +406,7 @@ else:
                 with col_right:
                     st.subheader("📋 ورود به دوره‌های موجود")
                     if not periods_meta:
-                        st.info("هنوز هیچ دوره‌ای ثبت نشده است. از کادر سمت راست دوره جدید بسازید.")
+                        st.info("هنوز هیچ دوره‌ای ثبت نشده است.")
                     else:
                         p_options = {p["name"]: p["id"] for p in periods_meta}
                         selected_p_name = st.selectbox("یک دوره را جهت بررسی یا اصلاح انتخاب کنید:", list(p_options.keys()))
@@ -423,7 +418,7 @@ else:
                                 st.rerun()
                         with c2:
                             with st.popover("🗑️ حذف این دوره"):
-                                st.warning(f"آیا از حذف کامل دوره «{selected_p_name}» مطمئن هستید؟ تمام فایل‌های این دوره پاک خواهند شد.")
+                                st.warning(f"آیا از حذف کامل دوره «{selected_p_name}» مطمئن هستید؟")
                                 if st.button("بله، دوره حذف شود", type="secondary"):
                                     delete_period(p_options[selected_p_name])
                                     st.success("دوره با موفقیت حذف شد.")
@@ -431,13 +426,11 @@ else:
 
             with tab_timeline:
                 st.header("📊 مقایسه روند عملکرد در طول زمان (Timeline)")
-                st.markdown("در این بخش می‌توانید چندین دوره را انتخاب کرده و روند تغییرات شاخص‌ها را مقایسه کنید. (حق تقدم زمانی: دوره‌های قدیمی‌تر در سمت چپ قرار می‌گیرند).")
 
                 if len(periods_meta) < 2:
                     st.info("💡 برای مشاهده تایم‌لاین و نمودارهای مقایسه‌ای روند، حداقل نیاز به ۲ دوره بارگذاری‌شده دارید.")
                 else:
                     all_period_names = [p["name"] for p in periods_meta]
-                    
                     c_start, c_end = st.columns(2)
                     with c_start:
                         start_p_name = st.selectbox("از دوره (شروع):", all_period_names, index=0)
@@ -451,8 +444,6 @@ else:
                         st.error("دوره شروع نباید بعد از دوره پایان باشد.")
                     else:
                         selected_periods_in_range = periods_meta[idx_start : idx_end + 1]
-                        st.success(f"دوران انتخاب‌شده ({len(selected_periods_in_range)} دوره): " + " ⬅️ ".join([p["name"] for p in selected_periods_in_range]))
-
                         timeline_records = []
                         all_metrics_set = set()
 
@@ -531,7 +522,6 @@ else:
             p_name = active_p_info["name"] if active_p_info else "نامشخص"
 
             st.title(f"📊 مدیریت دوره: `{p_name}`")
-            st.info("💡 فایل‌های بارگذاری‌شده در این تب‌ها اختصاصاً متعلق به این دوره هستند. بارگذاری جدید فایل‌ها، اطلاعات قبلی همین دوره را به‌روزرسانی (Override) می‌کند.")
 
             df_main, err_main = load_period_data(active_p_id, "main")
             df_drugs, err_drugs = load_period_data(active_p_id, "drugs")
@@ -549,7 +539,6 @@ else:
             # --- تب ۱: بارگذاری ---
             with tab1:
                 st.header(f"📁 بارگذاری و جایگزینی فایل‌های دوره: {p_name}")
-                
                 col_u1, col_u2 = st.columns(2)
                 with col_u1:
                     st.subheader("۱. اکسل شاخص‌های عمومی")
@@ -563,7 +552,7 @@ else:
                         df_new, err_msg = read_uploaded_file(up_main)
                         if df_new is not None and not df_new.empty:
                             save_period_data(active_p_id, "main", df_new)
-                            st.success("✅ فایل عمومی با موفقیت پردازش و ذخیره شد.")
+                            st.success("✅ فایل عمومی با موفقیت ذخیره شد.")
                             st.rerun()
                         else:
                             st.error(f"❌ خطا در خواندن فایل عمومی: {err_msg}")
@@ -580,7 +569,7 @@ else:
                         df_d_new, err_d_msg = read_uploaded_file(up_drugs)
                         if df_d_new is not None and not df_d_new.empty:
                             save_period_data(active_p_id, "drugs", df_d_new)
-                            st.success("✅ فایل اقلام دارویی با موفقیت پردازش و ذخیره شد.")
+                            st.success("✅ فایل اقلام دارویی با موفقیت ذخیره شد.")
                             st.rerun()
                         else:
                             st.error(f"❌ خطا در خواندن فایل دارویی: {err_d_msg}")
@@ -594,12 +583,28 @@ else:
 
                     st.subheader(f"مقایسه کلی تمام پزشکان ({p_name})")
                     selected_metric = st.selectbox("انتخاب شاخص:", metrics, key="tab2_m")
-                    fig_bar = px.bar(df_main, x=doctor_col, y=selected_metric, text_auto=True, color=selected_metric, color_continuous_scale="Viridis")
+                    
+                    # سورت نزولی داده‌ها بر اساس شاخص انتخاب شده
+                    df_main_sorted = df_main.copy()
+                    df_main_sorted[selected_metric] = pd.to_numeric(df_main_sorted[selected_metric], errors='coerce').fillna(0)
+                    df_main_sorted = df_main_sorted.sort_values(by=selected_metric, ascending=False)
+
+                    fig_bar = px.bar(
+                        df_main_sorted, 
+                        x=doctor_col, 
+                        y=selected_metric, 
+                        text_auto=True, 
+                        color=selected_metric, 
+                        color_continuous_scale="Viridis",
+                        title=f"مقایسه پزشکان در شاخص {selected_metric} (مرتب‌شده از بزرگ به کوچک)"
+                    )
+                    fig_bar.update_xaxes(categoryorder='total descending')
                     st.plotly_chart(fig_bar, use_container_width=True)
+                    
                     st.subheader("جدول رتبه‌بندی کلی")
                     st.dataframe(df_ranks.set_index(doctor_col))
                 else:
-                    st.warning("⚠️ لطفاً ابتدا فایل شاخص‌های عمومی را در تب اول همین دوره بارگذاری کنید.")
+                    st.warning("⚠️ لطفاً ابتدا فایل شاخص‌های عمومی را بارگذاری کنید.")
 
             # --- تب ۳: بررسی فردی ---
             with tab3:
@@ -613,11 +618,46 @@ else:
                     doc_data = df_main[df_main[doctor_col] == selected_doc].iloc[0]
                     doc_ranks = df_ranks[df_ranks[doctor_col] == selected_doc].iloc[0]
                     
-                    st.subheader(f"کارنامه کامل: {selected_doc} ({p_name})")
-                    cols = st.columns(2)
-                    for i, metric in enumerate(metrics):
-                        with cols[i % 2]:
-                            st.metric(label=metric, value=f"{doc_data[metric]}", delta=f"رتبه {doc_ranks[metric]} از {len(df_main)}")
+                    numeric_df = df_main[metrics].apply(pd.to_numeric, errors='coerce')
+                    avg_data = numeric_df.mean()
+
+                    st.subheader(f"📊 کارنامه بصری و تحلیلی: {selected_doc} ({p_name})")
+                    
+                    # ایجاد دیتافریم مقایسه‌ای برای رسم نمودار و جدول
+                    doc_comp_list = []
+                    for m in metrics:
+                        val = pd.to_numeric(doc_data[m], errors='coerce')
+                        val_num = val if not pd.isna(val) else 0
+                        avg_val = round(avg_data[m], 2)
+                        
+                        doc_comp_list.append({
+                            "شاخص": m,
+                            "مقدار پزشک": val_num,
+                            "میانگین درمانگاه": avg_val,
+                            "رتبه": f"{doc_ranks[m]} از {len(df_main)}"
+                        })
+                    
+                    df_doc_comp = pd.DataFrame(doc_comp_list)
+                    df_doc_comp_sorted = df_doc_comp.sort_values(by="مقدار پزشک", ascending=False)
+
+                    # نمودار مقایسه‌ای
+                    df_chart_melt = pd.melt(df_doc_comp_sorted, id_vars=['شاخص'], value_vars=['مقدار پزشک', 'میانگین درمانگاه'], var_name='مرجع', value_name='مقدار')
+                    fig_doc_individual = px.bar(
+                        df_chart_melt,
+                        x='شاخص',
+                        y='مقدار',
+                        color='مرجع',
+                        barmode='group',
+                        text_auto='.1f',
+                        title=f"مقایسه تصویری شاخص‌های {selected_doc} با میانگین کل درمانگاه (مرتب‌شده از بزرگ به کوچک)"
+                    )
+                    fig_doc_individual.update_xaxes(categoryorder='total descending')
+                    st.plotly_chart(fig_doc_individual, use_container_width=True)
+
+                    # جدول عملکرد پزشک
+                    st.subheader("📋 جدول خلاصه وضعیت شاخص‌ها")
+                    st.dataframe(df_doc_comp_sorted, use_container_width=True, hide_index=True)
+
                 else:
                     st.warning("⚠️ فایل شاخص‌های عمومی بارگذاری نشده است.")
 
@@ -663,6 +703,9 @@ else:
                                 doc_grouped = drug_df.groupby(doc_c)[qty_c].sum().reset_index()
                                 doc_grouped = doc_grouped[doc_grouped[qty_c] > 0]
                                 
+                                # مرتب‌سازی نزولی داده‌ها قبل از رسم نمودار
+                                doc_grouped = doc_grouped.sort_values(by=qty_c, ascending=False)
+                                
                                 total_drug_qty = doc_grouped[qty_c].sum()
                                 doc_grouped['درصد'] = (doc_grouped[qty_c] / total_drug_qty) * 100
                                 doc_grouped['برچسب_نمودار'] = doc_grouped.apply(lambda r: f"{int(r[qty_c])} عدد ({r['درصد']:.1f}%)", axis=1)
@@ -674,23 +717,21 @@ else:
                                     text='برچسب_نمودار',
                                     color=qty_c,
                                     color_continuous_scale='Blues',
-                                    title=f"توزیع درصد و تعداد تجویز {target_title} بین پزشکان در دوره {p_name}"
+                                    title=f"توزیع درصد و تعداد تجویز {target_title} بین پزشکان (مرتب‌شده از بزرگ به کوچک)"
                                 )
+                                fig_drug.update_xaxes(categoryorder='total descending')
                                 fig_drug.update_traces(textposition='outside')
                                 st.plotly_chart(fig_drug, use_container_width=True)
                 else:
                     st.warning("⚠️ فایل اقلام دارویی برای این دوره بارگذاری نشده است.")
 
-            # --- تب ۵: دارو به ویزیت ---
+            # --- تب ۵: دارو به ویزیت (همراه جدول تحلیلی جدید) ---
             with tab5:
                 st.header("📋 میزان تجویز هر دارو به ازای هر ویزیت پزشک")
                 if df_main is None or df_drugs is None:
-                    st.error("⚠️ برای این محاسبه، بارگذاری هر دو فایل (عمومی و دارویی) در تب اول الزامی است.")
+                    st.error("⚠️ برای این محاسبه، بارگذاری هر دو فایل (عمومی و دارویی) الزامی است.")
                 else:
                     doc_col_main = df_main.columns[0]
-                    visit_candidates = [c for c in df_main.columns if 'ویزیت' in c or 'نسخ' in c]
-                    default_visit_col = visit_candidates[0] if visit_candidates else df_main.columns[1]
-                    
                     visit_col = st.selectbox("📌 ستون تعداد کل ویزیت‌ها:", options=df_main.columns[1:], key="visit_col_select_p")
 
                     df_d = df_drugs.copy()
@@ -729,6 +770,9 @@ else:
                             merged_data = merged_data[merged_data[visit_col] > 0].copy()
 
                             merged_data['میزان_در_هر_ویزیت'] = merged_data[drug_qty_col] / merged_data[visit_col]
+                            
+                            # مرتب‌سازی نزولی بر اساس میزان در هر ویزیت (مهم برای محور X و جدول)
+                            merged_data = merged_data.sort_values(by='میزان_در_هر_ویزیت', ascending=False)
                             merged_data['برچسب'] = merged_data.apply(lambda r: f"{r['میزان_در_هر_ویزیت']:.2f} (کل: {int(r[drug_qty_col]):,} از {int(r[visit_col]):,} ویزیت)", axis=1)
 
                             fig_bar = px.bar(
@@ -738,10 +782,25 @@ else:
                                 text='برچسب',
                                 color='میزان_در_هر_ویزیت',
                                 color_continuous_scale='Tealgrn',
-                                title=f"میزان تجویز {target_title} به ازای هر ویزیت پزشک در دوره {p_name}"
+                                title=f"میزان تجویز {target_title} به ازای هر ویزیت پزشک (مرتب‌شده از بزرگ به کوچک)"
                             )
+                            fig_bar.update_xaxes(categoryorder='total descending')
                             fig_bar.update_traces(textposition='outside')
                             st.plotly_chart(fig_bar, use_container_width=True)
+
+                            st.markdown("---")
+                            st.subheader(f"📋 جدول مقایسه‌ای نسبت تجویز {target_title} به ویزیت")
+                            
+                            # ساخت جدول مورد درخواست کاربر
+                            table_df = merged_data[['doc_clean', drug_qty_col, 'میزان_در_هر_ویزیت']].copy()
+                            table_df.columns = ['نام پزشک', 'میزان تجویز (تعداد)', 'نسبت دارو به نسخه']
+                            table_df['میزان تجویز (تعداد)'] = table_df['میزان تجویز (تعداد)'].astype(int)
+                            table_df['نسبت دارو به نسخه'] = table_df['نسبت دارو به نسخه'].round(3)
+                            
+                            # سورت نزولی قطعی جدول بر اساس ستون «نسبت دارو به نسخه»
+                            table_df = table_df.sort_values(by='نسبت دارو به نسخه', ascending=False)
+                            
+                            st.dataframe(table_df, use_container_width=True, hide_index=True)
 
             # --- تب ۶: تنظیمات شاخص‌ها ---
             with tab6:
@@ -801,7 +860,7 @@ else:
                         st.success("توصیه اختصاصی ذخیره شد.")
 
     # =============================================================
-    # ۲. بخش پزشکان (DOCTOR VIEW)
+    # ۲. بخش پزشکان (DOCTOR VIEW - جذاب و همراه نمودار/جدول)
     # =============================================================
     elif st.session_state.user_role == "doctor":
         current_doc = clean_name(st.session_state.doctor_name)
@@ -848,7 +907,9 @@ else:
                     df_ranks['doc_clean'] = df_ranks[doctor_col].apply(clean_name)
                     doc_ranks = df_ranks[df_ranks['doc_clean'] == current_doc].iloc[0]
 
-                    st.subheader(f"📋 کارنامه عملکرد شما در دوره: {selected_p_name_doc}")
+                    st.subheader(f"📋 کارنامه خلاصه عملکرد در دوره: {selected_p_name_doc}")
+                    
+                    # کارت‌های استریم‌لیت
                     cols = st.columns(2)
                     metric_settings = st.session_state.get("metric_settings", {})
 
@@ -865,38 +926,80 @@ else:
                             )
 
                     st.markdown("---")
-                    st.subheader("⚠️ تحلیل هوشمند وضعیت تجویزی شما")
+                    
+                    # ۱. ساخت جدول خلاصه عملکرد پزشک
+                    summary_list = []
                     warnings, goods, critical_metrics = [], [], []
 
                     for metric in metrics:
                         val = pd.to_numeric(doc_data[metric], errors='coerce')
-                        if pd.isna(val):
-                            continue
-                        avg = avg_data[metric]
+                        val_num = val if not pd.isna(val) else 0
+                        avg_val = round(avg_data[metric], 2)
+                        rank_val = doc_ranks[metric]
 
                         m_set = metric_settings.get(metric, {})
                         direction = m_set.get("direction", "کمتر بهتر" if ("ویزیت" not in metric and "آزمایشگاه" not in metric and "نسخ" not in metric) else "بیشتر بهتر")
                         tol_percent = m_set.get("tolerance", 10.0) / 100.0
 
-                        low_bound = avg * (1.0 - tol_percent)
-                        high_bound = avg * (1.0 + tol_percent)
+                        low_bound = avg_val * (1.0 - tol_percent)
+                        high_bound = avg_val * (1.0 + tol_percent)
 
                         if direction == "کمتر بهتر":
-                            if val < low_bound:
-                                goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** میزان تجویز شما ({val}) پایین‌تر از میانگین درمانگاه ({round(avg, 1)}) است.")
-                            elif low_bound <= val <= high_bound:
-                                goods.append(f"🟢 **عملکرد استاندارد در {metric}:** میزان تجویز شما ({val}) هم‌تراز با میانگین درمانگاه ({round(avg, 1)}) است.")
+                            if val_num < low_bound:
+                                status = "🟢 عالی (پایین‌تر از میانگین)"
+                                goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** میزان تجویز شما ({val_num}) پایین‌تر از میانگین درمانگاه ({avg_val}) است.")
+                            elif low_bound <= val_num <= high_bound:
+                                status = "🟢 نرمال (هم‌تراز میانگین)"
+                                goods.append(f"🟢 **عملکرد استاندارد در {metric}:** میزان تجویز شما ({val_num}) هم‌تراز با میانگین درمانگاه ({avg_val}) است.")
                             else:
-                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** میزان تجویز شما ({val}) بالاتر از حد میانگین درمانگاه ({round(avg, 1)}) است.")
-                                critical_metrics.append((metric, val, avg))
+                                status = "🔴 نیازمند بازبینی (بالاتر از میانگین)"
+                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** میزان تجویز شما ({val_num}) بالاتر از حد میانگین درمانگاه ({avg_val}) است.")
+                                critical_metrics.append((metric, val_num, avg_val))
                         else:
-                            if val > high_bound:
-                                goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** آمار شما ({val}) بالاتر از میانگین درمانگاه ({round(avg, 1)}) است.")
-                            elif low_bound <= val <= high_bound:
-                                goods.append(f"🟢 **عملکرد استاندارد در {metric}:** آمار شما ({val}) هم‌تراز با میانگین درمانگاه ({round(avg, 1)}) است.")
+                            if val_num > high_bound:
+                                status = "🟢 عالی (بالاتر از میانگین)"
+                                goods.append(f"🟢 **عملکرد ایده‌آل در {metric}:** آمار شما ({val_num}) بالاتر از میانگین درمانگاه ({avg_val}) است.")
+                            elif low_bound <= val_num <= high_bound:
+                                status = "🟢 نرمال (هم‌تراز میانگین)"
+                                goods.append(f"🟢 **عملکرد استاندارد در {metric}:** آمار شما ({val_num}) هم‌تراز با میانگین درمانگاه ({avg_val}) است.")
                             else:
-                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** آمار شما ({val}) پایین‌تر از حد میانگین درمانگاه ({round(avg, 1)}) است.")
-                                critical_metrics.append((metric, val, avg))
+                                status = "🔴 نیازمند بازبینی (پایین‌تر از میانگین)"
+                                warnings.append(f"🔴 **وضعیت بحرانی در {metric}:** آمار شما ({val_num}) پایین‌تر از حد میانگین درمانگاه ({avg_val}) است.")
+                                critical_metrics.append((metric, val_num, avg_val))
+
+                        summary_list.append({
+                            "شاخص": metric,
+                            "مقدار شما": val_num,
+                            "میانگین درمانگاه": avg_val,
+                            "رتبه شما": f"{rank_val} از {len(df)}",
+                            "وضعیت": status
+                        })
+
+                    df_doc_summary = pd.DataFrame(summary_list)
+                    df_doc_summary_sorted = df_doc_summary.sort_values(by="مقدار شما", ascending=False)
+
+                    # ۲. افزودن نمودار مقایسه‌ای پویا برای جذاب‌سازی پنل پزشک
+                    st.subheader("📊 مقایسه تصویری کارنامه شما در برابر میانگین درمانگاه")
+                    df_chart_doc = pd.melt(df_doc_summary_sorted, id_vars=['شاخص'], value_vars=['مقدار شما', 'میانگین درمانگاه'], var_name='مرجع', value_name='مقدار')
+                    
+                    fig_doc_comp = px.bar(
+                        df_chart_doc,
+                        x='شاخص',
+                        y='مقدار',
+                        color='مرجع',
+                        barmode='group',
+                        text_auto='.1f',
+                        title="مقایسه مقادیر شما با میانگین کل درمانگاه (مرتب‌شده از بزرگ به کوچک)"
+                    )
+                    fig_doc_comp.update_xaxes(categoryorder='total descending')
+                    st.plotly_chart(fig_doc_comp, use_container_width=True)
+
+                    # ۳. افزودن جدول جامع به پنل پزشک
+                    st.subheader("📋 جدول مقایسه‌ای وضعیت شاخص‌ها")
+                    st.dataframe(df_doc_summary_sorted, use_container_width=True, hide_index=True)
+
+                    st.markdown("---")
+                    st.subheader("⚠️ تحلیل هوشمند وضعیت تجویزی شما")
 
                     if warnings:
                         st.error("### موارد نیازمند بازبینی")
