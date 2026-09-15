@@ -33,7 +33,31 @@ def clean_name(text):
         
     return " ".join(text.split())
 
-# ------------------ مدیریت متادیتای دوره‌ها ------------------
+# ------------------ موتور خوانش هوشمند فایل‌های اکسل/HTML/CSV ------------------
+def read_uploaded_file(uploaded_file):
+    """خوانش هوشمند انواع فایل اکسل (xlsx, xls, html-excel, csv)"""
+    try:
+        try:
+            df = pd.read_excel(uploaded_file)
+        except Exception:
+            uploaded_file.seek(0)
+            try:
+                df = pd.read_excel(uploaded_file, engine='openpyxl')
+            except Exception:
+                uploaded_file.seek(0)
+                try:
+                    # اکثر خروجی‌های سیستم‌های بیمه/درمانگاه در واقع HTML هستند
+                    df = pd.read_html(uploaded_file)[0]
+                except Exception:
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(uploaded_file)
+        
+        df = df.dropna(how='all')
+        return df, None
+    except Exception as e:
+        return None, str(e)
+
+# ------------------ مدیریت ذخیره و فراخوانی داده‌های دوره‌ها ------------------
 META_FILE = os.path.join(PERIODS_DIR, "periods_meta.json")
 
 def get_periods_meta():
@@ -74,10 +98,45 @@ def delete_period(period_id):
     if os.path.exists(p_dir):
         shutil.rmtree(p_dir)
 
-def get_period_file_path(period_id, file_type):
-    """file_type can be 'main' or 'drugs'"""
-    return os.path.join(PERIODS_DIR, period_id, f"{file_type}.xlsx")
+def save_period_data(period_id, file_type, df):
+    """ذخیره فایل با فرمت پایدار CSV (با کدگذاری utf-8-sig برای پشتیبانی کامل از فارسی)"""
+    p_dir = os.path.join(PERIODS_DIR, period_id)
+    os.makedirs(p_dir, exist_ok=True)
+    csv_path = os.path.join(p_dir, f"{file_type}.csv")
+    df.to_csv(csv_path, index=False, encoding='utf-8-sig')
 
+def load_period_data(period_id, file_type):
+    """خوانش داده‌های دوره از حافظه"""
+    p_dir = os.path.join(PERIODS_DIR, period_id)
+    csv_path = os.path.join(p_dir, f"{file_type}.csv")
+    xlsx_path = os.path.join(p_dir, f"{file_type}.xlsx")
+    
+    target_path = None
+    if os.path.exists(csv_path):
+        target_path = csv_path
+    elif os.path.exists(xlsx_path):
+        target_path = xlsx_path
+        
+    if not target_path:
+        return None, "فایل ثبت نشده است."
+        
+    try:
+        if target_path.endswith('.csv'):
+            df = pd.read_csv(target_path, encoding='utf-8-sig')
+        else:
+            try:
+                df = pd.read_excel(target_path)
+            except Exception:
+                df = pd.read_html(target_path)[0]
+                
+        if df is not None and not df.empty:
+            first_col = df.columns[0]
+            df[first_col] = df[first_col].apply(clean_name)
+        return df, None
+    except Exception as e:
+        return None, f"خطا در خوانش فایل: {str(e)}"
+
+# ------------------ تنظیمات عمومی ------------------
 def save_settings():
     settings = {
         "passwords": st.session_state.doctor_passwords,
@@ -243,7 +302,6 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "admin123"
 DOCTOR_DEFAULT_PASSWORD = "1234"
 
-# گزینه‌های فیلتر دارویی
 filter_options = [
     "همه اشکال", 
     "خوراکی (Tab, Cap, Syru, Susp)", 
@@ -300,7 +358,6 @@ if not st.session_state.logged_in:
 # ------------------ پنل اصلی پس از ورود ------------------
 else:
     periods_meta = get_periods_meta()
-    # مرتب‌سازی دوره‌ها بر اساس زمان ساخت (قدیمی به جدید برای حق تقدم در تایم‌لاین)
     periods_meta = sorted(periods_meta, key=lambda x: x.get("created_at", 0))
 
     with st.sidebar:
@@ -329,13 +386,12 @@ else:
     # =============================================================
     if st.session_state.user_role == "admin":
         
-        # ------------------ حالت A: انتخاب یا مدیریت دوره (صفحه اول ادمین) ------------------
+        # ------------------ حالت A: انتخاب یا مدیریت دوره ------------------
         if not st.session_state.active_period_id:
             st.title("🗓️ صفحه مدیریت دوره‌ها و تحلیل تایم‌لاین (Timeline)")
             
             tab_manage, tab_timeline = st.tabs(["📂 انتخاب و ایجاد دوره ارزیابی", "📈 تایم‌لاین و تحلیل روند (Timeline)"])
 
-            # --- تب مدیریت و انتخاب دوره ---
             with tab_manage:
                 col_left, col_right = st.columns([1, 1])
 
@@ -373,7 +429,6 @@ else:
                                     st.success("دوره با موفقیت حذف شد.")
                                     st.rerun()
 
-            # --- تب تایم‌لاین و بررسی روند دوره‌ها ---
             with tab_timeline:
                 st.header("📊 مقایسه روند عملکرد در طول زمان (Timeline)")
                 st.markdown("در این بخش می‌توانید چندین دوره را انتخاب کرده و روند تغییرات شاخص‌ها را مقایسه کنید. (حق تقدم زمانی: دوره‌های قدیمی‌تر در سمت چپ قرار می‌گیرند).")
@@ -398,33 +453,27 @@ else:
                         selected_periods_in_range = periods_meta[idx_start : idx_end + 1]
                         st.success(f"دوران انتخاب‌شده ({len(selected_periods_in_range)} دوره): " + " ⬅️ ".join([p["name"] for p in selected_periods_in_range]))
 
-                        # جمع‌آوری داده‌های شاخص اصلی از دوره‌های انتخابی
                         timeline_records = []
                         all_metrics_set = set()
 
                         for p in selected_periods_in_range:
-                            main_path = get_period_file_path(p["id"], "main")
-                            if os.path.exists(main_path):
-                                try:
-                                    df_p = pd.read_excel(main_path)
-                                    doc_col = df_p.columns[0]
-                                    df_p[doc_col] = df_p[doc_col].apply(clean_name)
-                                    metrics_p = df_p.columns[1:]
-                                    
-                                    for m in metrics_p:
-                                        all_metrics_set.add(m)
-                                        for _, row in df_p.iterrows():
-                                            val = pd.to_numeric(row[m], errors='coerce')
-                                            if not pd.isna(val):
-                                                timeline_records.append({
-                                                    "دوره": p["name"],
-                                                    "پزشک": row[doc_col],
-                                                    "شاخص": m,
-                                                    "مقدار": val,
-                                                    "timestamp": p["created_at"]
-                                                })
-                                except Exception:
-                                    pass
+                            df_p, err_p = load_period_data(p["id"], "main")
+                            if df_p is not None and not df_p.empty:
+                                doc_col = df_p.columns[0]
+                                metrics_p = df_p.columns[1:]
+                                
+                                for m in metrics_p:
+                                    all_metrics_set.add(m)
+                                    for _, row in df_p.iterrows():
+                                        val = pd.to_numeric(row[m], errors='coerce')
+                                        if not pd.isna(val):
+                                            timeline_records.append({
+                                                "دوره": p["name"],
+                                                "پزشک": row[doc_col],
+                                                "شاخص": m,
+                                                "مقدار": val,
+                                                "timestamp": p["created_at"]
+                                            })
 
                         if not timeline_records:
                             st.warning("هیچ فایلی در دوره‌های انتخابی برای استخراج تایم‌لاین پیدا نشد.")
@@ -461,7 +510,6 @@ else:
                             fig_timeline.update_layout(xaxis_type='category')
                             st.plotly_chart(fig_timeline, use_container_width=True)
 
-                            # میانگین درمانگاه در طول زمان
                             st.subheader("📉 روند میانگین کل درمانگاه در طول زمان")
                             df_clinic_avg = df_metric.groupby("دوره")["مقدار"].mean().reset_index()
                             fig_avg = px.line(
@@ -485,24 +533,8 @@ else:
             st.title(f"📊 مدیریت دوره: `{p_name}`")
             st.info("💡 فایل‌های بارگذاری‌شده در این تب‌ها اختصاصاً متعلق به این دوره هستند. بارگذاری جدید فایل‌ها، اطلاعات قبلی همین دوره را به‌روزرسانی (Override) می‌کند.")
 
-            main_file_path = get_period_file_path(active_p_id, "main")
-            drugs_file_path = get_period_file_path(active_p_id, "drugs")
-
-            df_main = None
-            if os.path.exists(main_file_path):
-                try:
-                    df_main = pd.read_excel(main_file_path)
-                    df_main[df_main.columns[0]] = df_main[df_main.columns[0]].apply(clean_name)
-                except Exception:
-                    pass
-
-            df_drugs = None
-            if os.path.exists(drugs_file_path):
-                try:
-                    df_drugs = pd.read_excel(drugs_file_path)
-                    df_drugs[df_drugs.columns[0]] = df_drugs[df_drugs.columns[0]].apply(clean_name)
-                except Exception:
-                    pass
+            df_main, err_main = load_period_data(active_p_id, "main")
+            df_drugs, err_drugs = load_period_data(active_p_id, "drugs")
 
             tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
                 "📁 بارگذاری فایل‌های دوره", 
@@ -522,34 +554,36 @@ else:
                 with col_u1:
                     st.subheader("۱. اکسل شاخص‌های عمومی")
                     if df_main is not None:
-                        st.success("✅ فایل شاخص‌های عمومی برای این دوره بارگذاری شده است.")
-                    up_main = st.file_uploader("بارگذاری / جایگزینی (Main Excel)", type=["xlsx", "xls"], key="up_main_period")
+                        st.success(f"✅ فایل عمومی این دوره بارگذاری شده است ({len(df_main)} ردیف).")
+                    else:
+                        st.info("فایلی برای شاخص‌های عمومی ثبت نشده است.")
+
+                    up_main = st.file_uploader("بارگذاری / جایگزینی (Main Excel / CSV / HTML)", type=["xlsx", "xls", "csv", "html"], key="up_main_period")
                     if up_main is not None:
-                        try:
-                            df_new = pd.read_excel(up_main)
-                        except Exception:
-                            up_main.seek(0)
-                            df_new = pd.read_html(up_main)[0]
-                        df_new[df_new.columns[0]] = df_new[df_new.columns[0]].apply(clean_name)
-                        df_new.to_excel(main_file_path, index=False)
-                        st.success("فایل عمومی ذخیره/جایگزین شد.")
-                        st.rerun()
+                        df_new, err_msg = read_uploaded_file(up_main)
+                        if df_new is not None and not df_new.empty:
+                            save_period_data(active_p_id, "main", df_new)
+                            st.success("✅ فایل عمومی با موفقیت پردازش و ذخیره شد.")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ خطا در خواندن فایل عمومی: {err_msg}")
 
                 with col_u2:
                     st.subheader("۲. اکسل اقلام دارویی")
                     if df_drugs is not None:
-                        st.success("✅ فایل اقلام دارویی برای این دوره بارگذاری شده است.")
-                    up_drugs = st.file_uploader("بارگذاری / جایگزینی (Drugs Excel)", type=["xlsx", "xls"], key="up_drugs_period")
+                        st.success(f"✅ فایل دارویی این دوره بارگذاری شده است ({len(df_drugs)} ردیف).")
+                    else:
+                        st.info("فایلی برای اقلام دارویی ثبت نشده است.")
+
+                    up_drugs = st.file_uploader("بارگذاری / جایگزینی (Drugs Excel / CSV / HTML)", type=["xlsx", "xls", "csv", "html"], key="up_drugs_period")
                     if up_drugs is not None:
-                        try:
-                            df_d_new = pd.read_excel(up_drugs)
-                        except Exception:
-                            up_drugs.seek(0)
-                            df_d_new = pd.read_html(up_drugs)[0]
-                        df_d_new[df_d_new.columns[0]] = df_d_new[df_d_new.columns[0]].apply(clean_name)
-                        df_d_new.to_excel(drugs_file_path, index=False)
-                        st.success("فایل اقلام دارویی ذخیره/جایگزین شد.")
-                        st.rerun()
+                        df_d_new, err_d_msg = read_uploaded_file(up_drugs)
+                        if df_d_new is not None and not df_d_new.empty:
+                            save_period_data(active_p_id, "drugs", df_d_new)
+                            st.success("✅ فایل اقلام دارویی با موفقیت پردازش و ذخیره شد.")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ خطا در خواندن فایل دارویی: {err_d_msg}")
 
             # --- تب ۲: مقایسه کل ---
             with tab2:
@@ -565,7 +599,7 @@ else:
                     st.subheader("جدول رتبه‌بندی کلی")
                     st.dataframe(df_ranks.set_index(doctor_col))
                 else:
-                    st.warning("لطفاً ابتدا فایل شاخص‌های عمومی را در تب اول بارگذاری کنید.")
+                    st.warning("⚠️ لطفاً ابتدا فایل شاخص‌های عمومی را در تب اول همین دوره بارگذاری کنید.")
 
             # --- تب ۳: بررسی فردی ---
             with tab3:
@@ -585,7 +619,7 @@ else:
                         with cols[i % 2]:
                             st.metric(label=metric, value=f"{doc_data[metric]}", delta=f"رتبه {doc_ranks[metric]} از {len(df_main)}")
                 else:
-                    st.warning("فایل شاخص‌های عمومی بارگذاری نشده است.")
+                    st.warning("⚠️ فایل شاخص‌های عمومی بارگذاری نشده است.")
 
             # --- تب ۴: درصد دارو به پزشک ---
             with tab4:
@@ -645,13 +679,13 @@ else:
                                 fig_drug.update_traces(textposition='outside')
                                 st.plotly_chart(fig_drug, use_container_width=True)
                 else:
-                    st.warning("فایل اقلام دارویی برای این دوره بارگذاری نشده است.")
+                    st.warning("⚠️ فایل اقلام دارویی برای این دوره بارگذاری نشده است.")
 
             # --- تب ۵: دارو به ویزیت ---
             with tab5:
                 st.header("📋 میزان تجویز هر دارو به ازای هر ویزیت پزشک")
                 if df_main is None or df_drugs is None:
-                    st.error("⚠️ برای این محاسبه، بارگذاری هر دو فایل (عمومی و دارویی) الزامی است.")
+                    st.error("⚠️ برای این محاسبه، بارگذاری هر دو فایل (عمومی و دارویی) در تب اول الزامی است.")
                 else:
                     doc_col_main = df_main.columns[0]
                     visit_candidates = [c for c in df_main.columns if 'ویزیت' in c or 'نسخ' in c]
@@ -780,8 +814,6 @@ else:
             selected_p_name_doc = st.selectbox("🗓️ انتخاب دوره ارزیابی جهت مشاهده کارنامه:", list(p_options.keys()))
             doc_active_p_id = p_options[selected_p_name_doc]
 
-            main_file_path = get_period_file_path(doc_active_p_id, "main")
-
             # بازخوردها
             doc_notes_dict = st.session_state.get('admin_doctor_notes', {})
             doc_note_content = doc_notes_dict.get(current_doc, "")
@@ -796,10 +828,11 @@ else:
                     st.warning(f"**✉️ توصیه اختصاصی برای شما ({current_doc}):**\n\n{doc_note_content}")
                 st.markdown("---")
 
-            if not os.path.exists(main_file_path):
+            df, err_doc_main = load_period_data(doc_active_p_id, "main")
+
+            if df is None or df.empty:
                 st.warning(f"⚠️ اطلاعات مربوط به دوره «{selected_p_name_doc}» هنوز کامل نشده است.")
             else:
-                df = pd.read_excel(main_file_path)
                 doctor_col = df.columns[0]
                 metrics = df.columns[1:]
                 df['doc_clean'] = df[doctor_col].apply(clean_name)
