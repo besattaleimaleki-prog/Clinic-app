@@ -20,17 +20,28 @@ def init_storage():
 
 init_storage()
 
-# ------------------ تابع هوشمند پاکسازی و تطبیق اسامی ------------------
+# ------------------ تابع هوشمند و پیشرفته پاکسازی و تطبیق اسامی ------------------
 def clean_name(text):
     if not text or pd.isna(text):
         return ""
-    text = str(text).strip()
-    text = text.replace('ي', 'ی').replace('ك', 'ک')
+    text = str(text)
     
-    prefix_pattern = r'^(دکتر|خانم|آقای|آقا|اقای|مهندس|پزشک)\b\s*'
+    # ۱. نرمال‌سازی حروف عربی/فارسی و فاصله‌های پنهان/نیم‌فاصله
+    text = text.replace('ي', 'ی').replace('ك', 'ک').replace('ة', 'ه')
+    text = text.replace('آ', 'ا').replace('أ', 'ا').replace('إ', 'ا')
+    text = text.replace('\u200c', ' ').replace('\xa0', ' ')
+    
+    # ۲. تبدیل علائم نگارشی متصل به عنوان‌ها به فاصله
+    text = re.sub(r'[\.:\-_]', ' ', text)
+    
+    # ۳. حذف هوشمند کلیه پیشوندها (حتی به صورت ترکیبی و چندتایی)
+    prefixes = ['دکتر', 'پزشک', 'مهندس', 'خانم', 'آقای', 'آقا', 'اقای', 'جناب', 'سرکار', 'استاد', 'سید', 'سیده']
+    prefix_pattern = r'^\s*(' + '|'.join(prefixes) + r')\s+'
+    
     while re.search(prefix_pattern, text, flags=re.IGNORECASE):
         text = re.sub(prefix_pattern, '', text, flags=re.IGNORECASE).strip()
         
+    # ۴. حذف فاصله‌های اضافه بین کلمات
     return " ".join(text.split())
 
 # ------------------ موتور خوانش هوشمند فایل‌های اکسل/HTML/CSV ------------------
@@ -52,6 +63,9 @@ def read_uploaded_file(uploaded_file):
                     df = pd.read_csv(uploaded_file)
         
         df = df.dropna(how='all')
+        if df is not None and not df.empty:
+            first_col = df.columns[0]
+            df[first_col] = df[first_col].apply(clean_name)
         return df, None
     except Exception as e:
         return None, str(e)
@@ -101,6 +115,9 @@ def save_period_data(period_id, file_type, df):
     p_dir = os.path.join(PERIODS_DIR, period_id)
     os.makedirs(p_dir, exist_ok=True)
     csv_path = os.path.join(p_dir, f"{file_type}.csv")
+    if df is not None and not df.empty:
+        first_col = df.columns[0]
+        df[first_col] = df[first_col].apply(clean_name)
     df.to_csv(csv_path, index=False, encoding='utf-8-sig')
 
 def load_period_data(period_id, file_type):
@@ -132,6 +149,18 @@ def load_period_data(period_id, file_type):
         return df, None
     except Exception as e:
         return None, f"خطا در خوانش فایل: {str(e)}"
+
+def get_all_registered_doctors():
+    """استخراج لیست تمام پزشکان از کل دوره‌های ثبت‌شده برای پنل ورود"""
+    doctors = set()
+    periods = get_periods_meta()
+    for p in periods:
+        df, _ = load_period_data(p["id"], "main")
+        if df is not None and not df.empty:
+            doc_col = df.columns[0]
+            cleaned_docs = df[doc_col].dropna().apply(clean_name).tolist()
+            doctors.update(cleaned_docs)
+    return sorted([d for d in doctors if d])
 
 # ------------------ تنظیمات عمومی ------------------
 def save_settings():
@@ -334,7 +363,13 @@ if not st.session_state.logged_in:
                 st.error("نام کاربری یا رمز عبور ادمین اشتباه است.")
     else:
         st.subheader("ورود اختصاصی پزشک")
-        selected_doc = st.text_input("نام و نام خانوادگی پزشک:")
+        all_docs = get_all_registered_doctors()
+        
+        if all_docs:
+            selected_doc = st.selectbox("نام خود را از لیست انتخاب کنید:", options=all_docs)
+        else:
+            selected_doc = st.text_input("نام و نام خانوادگی پزشک:")
+            
         doc_password = st.text_input("رمز عبور اختصاصی (پیش‌فرض: 1234)", type="password")
         
         if st.button("ورود به پنل پزشک", type="primary"):
@@ -460,7 +495,7 @@ else:
                                         if not pd.isna(val):
                                             timeline_records.append({
                                                 "دوره": p["name"],
-                                                "پزشک": row[doc_col],
+                                                "پزشک": clean_name(row[doc_col]),
                                                 "شاخص": m,
                                                 "مقدار": val,
                                                 "timestamp": p["created_at"]
@@ -584,7 +619,6 @@ else:
                     st.subheader(f"مقایسه کلی تمام پزشکان ({p_name})")
                     selected_metric = st.selectbox("انتخاب شاخص:", metrics, key="tab2_m")
                     
-                    # سورت نزولی داده‌ها بر اساس شاخص انتخاب شده
                     df_main_sorted = df_main.copy()
                     df_main_sorted[selected_metric] = pd.to_numeric(df_main_sorted[selected_metric], errors='coerce').fillna(0)
                     df_main_sorted = df_main_sorted.sort_values(by=selected_metric, ascending=False)
@@ -612,7 +646,7 @@ else:
                     doctor_col = df_main.columns[0]
                     metrics = df_main.columns[1:]
                     df_ranks = calculate_ranks(df_main, metrics)
-                    doctors_list = df_main[doctor_col].dropna().unique().tolist()
+                    doctors_list = sorted(df_main[doctor_col].dropna().unique().tolist())
                     
                     selected_doc = st.selectbox("انتخاب پزشک جهت بررسی:", doctors_list, key="tab3_doc")
                     doc_data = df_main[df_main[doctor_col] == selected_doc].iloc[0]
@@ -623,7 +657,6 @@ else:
 
                     st.subheader(f"📊 کارنامه بصری و تحلیلی: {selected_doc} ({p_name})")
                     
-                    # ایجاد دیتافریم مقایسه‌ای برای رسم نمودار و جدول
                     doc_comp_list = []
                     for m in metrics:
                         val = pd.to_numeric(doc_data[m], errors='coerce')
@@ -640,7 +673,6 @@ else:
                     df_doc_comp = pd.DataFrame(doc_comp_list)
                     df_doc_comp_sorted = df_doc_comp.sort_values(by="مقدار پزشک", ascending=False)
 
-                    # نمودار مقایسه‌ای
                     df_chart_melt = pd.melt(df_doc_comp_sorted, id_vars=['شاخص'], value_vars=['مقدار پزشک', 'میانگین درمانگاه'], var_name='مرجع', value_name='مقدار')
                     fig_doc_individual = px.bar(
                         df_chart_melt,
@@ -654,7 +686,6 @@ else:
                     fig_doc_individual.update_xaxes(categoryorder='total descending')
                     st.plotly_chart(fig_doc_individual, use_container_width=True)
 
-                    # جدول عملکرد پزشک
                     st.subheader("📋 جدول خلاصه وضعیت شاخص‌ها")
                     st.dataframe(df_doc_comp_sorted, use_container_width=True, hide_index=True)
 
@@ -703,7 +734,6 @@ else:
                                 doc_grouped = drug_df.groupby(doc_c)[qty_c].sum().reset_index()
                                 doc_grouped = doc_grouped[doc_grouped[qty_c] > 0]
                                 
-                                # مرتب‌سازی نزولی داده‌ها قبل از رسم نمودار
                                 doc_grouped = doc_grouped.sort_values(by=qty_c, ascending=False)
                                 
                                 total_drug_qty = doc_grouped[qty_c].sum()
@@ -725,7 +755,7 @@ else:
                 else:
                     st.warning("⚠️ فایل اقلام دارویی برای این دوره بارگذاری نشده است.")
 
-            # --- تب ۵: دارو به ویزیت (همراه جدول تحلیلی جدید) ---
+            # --- تب ۵: دارو به ویزیت ---
             with tab5:
                 st.header("📋 میزان تجویز هر دارو به ازای هر ویزیت پزشک")
                 if df_main is None or df_drugs is None:
@@ -771,7 +801,6 @@ else:
 
                             merged_data['میزان_در_هر_ویزیت'] = merged_data[drug_qty_col] / merged_data[visit_col]
                             
-                            # مرتب‌سازی نزولی بر اساس میزان در هر ویزیت (مهم برای محور X و جدول)
                             merged_data = merged_data.sort_values(by='میزان_در_هر_ویزیت', ascending=False)
                             merged_data['برچسب'] = merged_data.apply(lambda r: f"{r['میزان_در_هر_ویزیت']:.2f} (کل: {int(r[drug_qty_col]):,} از {int(r[visit_col]):,} ویزیت)", axis=1)
 
@@ -791,15 +820,12 @@ else:
                             st.markdown("---")
                             st.subheader(f"📋 جدول مقایسه‌ای نسبت تجویز {target_title} به ویزیت")
                             
-                            # ساخت جدول مورد درخواست کاربر
                             table_df = merged_data[['doc_clean', drug_qty_col, 'میزان_در_هر_ویزیت']].copy()
                             table_df.columns = ['نام پزشک', 'میزان تجویز (تعداد)', 'نسبت دارو به نسخه']
                             table_df['میزان تجویز (تعداد)'] = table_df['میزان تجویز (تعداد)'].astype(int)
                             table_df['نسبت دارو به نسخه'] = table_df['نسبت دارو به نسخه'].round(3)
                             
-                            # سورت نزولی قطعی جدول بر اساس ستون «نسبت دارو به نسخه»
                             table_df = table_df.sort_values(by='نسبت دارو به نسخه', ascending=False)
-                            
                             st.dataframe(table_df, use_container_width=True, hide_index=True)
 
             # --- تب ۶: تنظیمات شاخص‌ها ---
@@ -850,7 +876,7 @@ else:
 
                 st.markdown("---")
                 if df_main is not None:
-                    doctors_list = df_main[df_main.columns[0]].dropna().unique().tolist()
+                    doctors_list = sorted(df_main[df_main.columns[0]].dropna().unique().tolist())
                     selected_target_doc = st.selectbox("پزشک مورد نظر را انتخاب کنید:", doctors_list, key="target_doc_p")
                     current_doc_note = st.session_state.admin_doctor_notes.get(clean_name(selected_target_doc), "")
                     spec_note = st.text_area(f"متن توصیه اختصاصی برای {selected_target_doc}:", value=current_doc_note, height=120)
@@ -860,7 +886,7 @@ else:
                         st.success("توصیه اختصاصی ذخیره شد.")
 
     # =============================================================
-    # ۲. بخش پزشکان (DOCTOR VIEW - جذاب و همراه نمودار/جدول)
+    # ۲. بخش پزشکان (DOCTOR VIEW)
     # =============================================================
     elif st.session_state.user_role == "doctor":
         current_doc = clean_name(st.session_state.doctor_name)
@@ -873,7 +899,6 @@ else:
             selected_p_name_doc = st.selectbox("🗓️ انتخاب دوره ارزیابی جهت مشاهده کارنامه:", list(p_options.keys()))
             doc_active_p_id = p_options[selected_p_name_doc]
 
-            # بازخوردها
             doc_notes_dict = st.session_state.get('admin_doctor_notes', {})
             doc_note_content = doc_notes_dict.get(current_doc, "")
             has_gen_note = bool(st.session_state.get('admin_general_notes', '').strip())
@@ -909,7 +934,6 @@ else:
 
                     st.subheader(f"📋 کارنامه خلاصه عملکرد در دوره: {selected_p_name_doc}")
                     
-                    # کارت‌های استریم‌لیت
                     cols = st.columns(2)
                     metric_settings = st.session_state.get("metric_settings", {})
 
@@ -927,7 +951,6 @@ else:
 
                     st.markdown("---")
                     
-                    # ۱. ساخت جدول خلاصه عملکرد پزشک
                     summary_list = []
                     warnings, goods, critical_metrics = [], [], []
 
@@ -978,7 +1001,6 @@ else:
                     df_doc_summary = pd.DataFrame(summary_list)
                     df_doc_summary_sorted = df_doc_summary.sort_values(by="مقدار شما", ascending=False)
 
-                    # ۲. افزودن نمودار مقایسه‌ای پویا برای جذاب‌سازی پنل پزشک
                     st.subheader("📊 مقایسه تصویری کارنامه شما در برابر میانگین درمانگاه")
                     df_chart_doc = pd.melt(df_doc_summary_sorted, id_vars=['شاخص'], value_vars=['مقدار شما', 'میانگین درمانگاه'], var_name='مرجع', value_name='مقدار')
                     
@@ -994,7 +1016,6 @@ else:
                     fig_doc_comp.update_xaxes(categoryorder='total descending')
                     st.plotly_chart(fig_doc_comp, use_container_width=True)
 
-                    # ۳. افزودن جدول جامع به پنل پزشک
                     st.subheader("📋 جدول مقایسه‌ای وضعیت شاخص‌ها")
                     st.dataframe(df_doc_summary_sorted, use_container_width=True, hide_index=True)
 
