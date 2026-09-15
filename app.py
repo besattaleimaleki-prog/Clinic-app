@@ -1002,7 +1002,27 @@ else:
                     df_doc_summary_sorted = df_doc_summary.sort_values(by="مقدار شما", ascending=False)
 
                     st.subheader("📊 مقایسه تصویری کارنامه شما در برابر میانگین درمانگاه")
-                    df_chart_doc = pd.melt(df_doc_summary_sorted, id_vars=['شاخص'], value_vars=['مقدار شما', 'میانگین درمانگاه'], var_name='مرجع', value_name='مقدار')
+
+                    # --- افزودن کادر انتخاب شاخص قبل از رسم نمودار ---
+                    chart_metrics_options = ["نمایش یکجای تمام شاخص‌ها"] + list(metrics)
+                    selected_doc_chart_metric = st.selectbox(
+                        "📌 شاخص مورد نظر جهت نمایش در نمودار را انتخاب کنید:",
+                        options=chart_metrics_options,
+                        key="doc_panel_chart_metric_select"
+                    )
+
+                    if selected_doc_chart_metric != "نمایش یکجای تمام شاخص‌ها":
+                        df_chart_filtered = df_doc_summary_sorted[df_doc_summary_sorted['شاخص'] == selected_doc_chart_metric]
+                    else:
+                        df_chart_filtered = df_doc_summary_sorted
+
+                    df_chart_doc = pd.melt(
+                        df_chart_filtered, 
+                        id_vars=['شاخص'], 
+                        value_vars=['مقدار شما', 'میانگین درمانگاه'], 
+                        var_name='مرجع', 
+                        value_name='مقدار'
+                    )
                     
                     fig_doc_comp = px.bar(
                         df_chart_doc,
@@ -1010,10 +1030,12 @@ else:
                         y='مقدار',
                         color='مرجع',
                         barmode='group',
-                        text_auto='.1f',
-                        title="مقایسه مقادیر شما با میانگین کل درمانگاه (مرتب‌شده از بزرگ به کوچک)"
+                        text_auto='.2f',
+                        title=f"مقایسه تصویری شاخص «{selected_doc_chart_metric}» شما با میانگین کل درمانگاه" if selected_doc_chart_metric != "نمایش یکجای تمام شاخص‌ها" else "مقایسه مقادیر شما با میانگین کل درمانگاه"
                     )
-                    fig_doc_comp.update_xaxes(categoryorder='total descending')
+                    if selected_doc_chart_metric == "نمایش یکجای تمام شاخص‌ها":
+                        fig_doc_comp.update_xaxes(categoryorder='total descending')
+
                     st.plotly_chart(fig_doc_comp, use_container_width=True)
 
                     st.subheader("📋 جدول مقایسه‌ای وضعیت شاخص‌ها")
