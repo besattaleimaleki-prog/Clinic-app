@@ -304,27 +304,104 @@ def get_clinical_guideline(metric_name, user_val, avg_val):
             f"میزان تجویز شما در شاخص **{metric_name}** با میانگین استاندارد درمانگاه فاصله دارد."
         )
 
-# ------------------ موتور هوشمند پاسخگویی به سوالات اکسل ------------------
+# ------------------ دیکشنری نگاشت مترادف‌های دارویی (فارسی به انگلیسی) ------------------
+DRUG_SYNONYMS = {
+    'دگزا': ['dexa', 'dexamethasone', 'دگزا'],
+    'بتامتازون': ['beta', 'betamethasone', 'بتا'],
+    'آموکسی': ['amox', 'amoxicillin', 'اموکسی'],
+    'آزیترو': ['azithro', 'azithromycin', 'ازیترو'],
+    'سفیکسیم': ['cefix', 'cefixime'],
+    'سفتریام': ['ceftriax', 'ceftriaxone'],
+    'پنی‌سیلین': ['penicillin', 'pen', 'پنی'],
+    'ژلوفن': ['gelofen', 'ibuprofen', 'پروفن'],
+    'مفنامیک': ['mefenamic'],
+    'دیکلوفناک': ['diclofenac'],
+    'سرم': ['infusion', 'sodium', 'dextrose', 'saline', 'solution', 'سرم'],
+    'دیفن': ['diphen', 'diphenhydramine'],
+    'استامینوفن': ['acetaminophen', 'paracetamol'],
+    'هیدروکورتیزون': ['hydrocortisone'],
+    'پرنیزولون': ['prednisolone'],
+    'کتورولاک': ['ketorolac'],
+}
+
+def match_doctor_in_text(text, doc_list):
+    """تطبیق هوشمند نام پزشک بر اساس اسم کامل یا نام خانوادگی"""
+    clean_q = clean_name(text)
+    # ۱. بررسی تطبیق دقیق
+    for doc in doc_list:
+        if doc and doc in clean_q:
+            return doc
+    # ۲. بررسی تطبیق بر اساس نام خانوادگی (کلمات با طول ۳ حرف به بالا)
+    for doc in doc_list:
+        parts = doc.split()
+        for part in parts:
+            if len(part) >= 3 and part in clean_q:
+                return doc
+    return None
+
+def find_matching_drugs_in_df(question, all_df_drugs):
+    """پیدا کردن تمامی داروهای درون اکسل که با سوال مطابقت دارند"""
+    q_lower = question.lower()
+    matched_drugs = []
+    
+    # الف) بررسی دیکشنری مترادف‌ها
+    for syn_key, syn_targets in DRUG_SYNONYMS.items():
+        if syn_key in q_lower:
+            for d in all_df_drugs:
+                d_str = str(d).lower()
+                if any(target in d_str for target in syn_targets):
+                    matched_drugs.append(d)
+                    
+    # ب) بررسی مستقیم عبارت انگلیسی یا فارسی
+    if not matched_drugs:
+        for d in all_df_drugs:
+            d_str = str(d).lower().strip()
+            # استخراج کلمات اصلی دارو (حداقل ۴ حرف)
+            words = [w for w in re.split(r'\W+', d_str) if len(w) >= 4 and w not in ['capsule', 'tablet', 'syrup', 'injection']]
+            if words and any(w in q_lower for w in words):
+                matched_drugs.append(d)
+                
+    return list(set(matched_drugs))
+
+# ------------------ موتور هوشمند پاسخگویی پیشرفته به پرسش‌نامه ------------------
 def process_questionnaire(df_q, df_main, df_drugs):
-    """پردازش خط به خط سوالات اکسل و استخراج پاسخ از دیتای پایه"""
-    q_col = df_q.columns[0]  # ستون اول: سوالات
+    """پردازش پیشرفته و هوشمند سوالات اکسل با توانایی تطبیق فارسی به انگلیسی و اسامی پزشکان"""
+    q_col = df_q.columns[0]
     answers = []
 
-    # آماده‌سازی دیتای دارویی و عمومی
+    # ۱. آماده‌سازی داده‌های دارویی و تشخیص ستون‌ها
     df_d = df_drugs.copy() if df_drugs is not None else None
+    doc_d_col, drug_name_col, drug_qty_col = None, None, None
     if df_d is not None and not df_d.empty:
-        doc_d_col = df_d.columns[0]
-        drug_name_col = df_d.columns[1]
-        drug_qty_col = df_d.columns[2]
+        cols = df_d.columns
+        # تشخیص ستون پزشک
+        doc_d_col = next((c for c in cols if any(k in str(c).lower() for k in ['پزشک', 'دکتر', 'طبیب', 'doc'])), cols[0])
+        # تشخیص ستون دارو
+        drug_name_col = next((c for c in cols if any(k in str(c).lower() for k in ['دارو', 'نام دارو', 'drug', 'item'])), cols[1] if len(cols) > 1 else cols[0])
+        # تشخیص ستون تعداد
+        drug_qty_col = next((c for c in cols if any(k in str(c).lower() for k in ['تعداد', 'مقدار', 'qty', 'count'])), cols[2] if len(cols) > 2 else cols[-1])
+
         df_d[drug_qty_col] = pd.to_numeric(df_d[drug_qty_col], errors='coerce').fillna(0)
         df_d['clean_doc'] = df_d[doc_d_col].apply(clean_name)
         df_d[drug_name_col] = df_d[drug_name_col].astype(str).str.strip()
 
+    # ۲. آماده‌سازی داده‌های عمومی و تشخیص ستون‌ها
     df_m = df_main.copy() if df_main is not None else None
+    doc_m_col = None
     if df_m is not None and not df_m.empty:
         doc_m_col = df_m.columns[0]
         df_m['clean_doc'] = df_m[doc_m_col].apply(clean_name)
 
+    all_docs = []
+    if df_m is not None:
+        all_docs.extend(df_m['clean_doc'].unique().tolist())
+    if df_d is not None:
+        all_docs.extend(df_d['clean_doc'].unique().tolist())
+    all_docs = list(set([d for d in all_docs if d]))
+
+    all_drugs = df_d[drug_name_col].unique().tolist() if df_d is not None else []
+
+    # پردازش خط به خط
     for idx, row in df_q.iterrows():
         question = str(row[q_col]).strip()
         ans = "پاسخی یافت نشد"
@@ -333,64 +410,60 @@ def process_questionnaire(df_q, df_main, df_drugs):
             answers.append("")
             continue
 
-        # ۱. تشخیص سوالات بیشترین تجویز یک دارو (مثال: بیشترین تجویز دگزا)
-        if ("بیشترین" in question or "بالاترین" in question) and ("دارو" in question or "تجویز" in question or df_d is not None):
-            found_drug = None
-            if df_d is not None:
-                all_drugs = df_d[drug_name_col].unique()
-                for d in sorted(all_drugs, key=len, reverse=True):
-                    if d.lower() in question.lower():
-                        found_drug = d
-                        break
+        q_clean = clean_name(question)
+        matched_doc = match_doctor_in_text(question, all_docs)
+        matched_drugs = find_matching_drugs_in_df(question, all_drugs)
 
-            if found_drug:
-                sub_d = df_d[df_d[drug_name_col] == found_drug]
-                grouped = sub_d.groupby('clean_doc')[drug_qty_col].sum()
-                if not grouped.empty and grouped.max() > 0:
-                    top_doc = grouped.idxmax()
-                    max_val = int(grouped.max())
-                    ans = f"{top_doc} (با تعداد {max_val} عدد)"
+        # سناریوی ۱: بیشترین / بالاترین تجویز یک دارو (بین پزشکان)
+        if ("بیشترین" in question or "بالاترین" in question or "کدام پزشک" in question) and matched_drugs and df_d is not None:
+            sub_d = df_d[df_d[drug_name_col].isin(matched_drugs)]
+            grouped = sub_d.groupby('clean_doc')[drug_qty_col].sum()
+            if not grouped.empty and grouped.max() > 0:
+                top_doc = grouped.idxmax()
+                max_val = int(grouped.max())
+                ans = f"دکتر {top_doc} (با تعداد {max_val} عدد)"
+            else:
+                ans = "بدون تجویز"
+
+        # سناریوی ۲: مجموع کل تجویز یک دارو در درمانگاه
+        elif ("تعداد" in question or "مجموع" in question or "چند" in question) and matched_drugs and not matched_doc and df_d is not None:
+            sub_d = df_d[df_d[drug_name_col].isin(matched_drugs)]
+            total_qty = int(sub_d[drug_qty_col].sum())
+            ans = f"{total_qty} عدد"
+
+        # سناریوی ۳: اطلاعات خاص یک پزشک (ویزیت، نسخ، شاخص‌ها)
+        elif matched_doc and df_m is not None:
+            doc_row = df_m[df_m['clean_doc'] == matched_doc]
+            if not doc_row.empty:
+                # اگر سوال درباره ویزیت بود
+                if "ویزیت" in question:
+                    visit_cols = [c for c in df_m.columns if "ویزیت" in str(c)]
+                    if visit_cols:
+                        v_val = doc_row[visit_cols[0]].values[0]
+                        ans = f"{int(v_val)} ویزیت" if pd.notna(v_val) else "0 ویزیت"
                 else:
-                    ans = "بدون تجویز"
+                    # جستجوی نام شاخص در ستون‌های عمومی
+                    found_metric = False
+                    for m_col in df_m.columns[1:]:
+                        if m_col != 'clean_doc' and m_col in question:
+                            val = doc_row[m_col].values[0]
+                            ans = f"{val}"
+                            found_metric = True
+                            break
+                    if not found_metric:
+                        # اگر شاخص خاصی پیدا نشد، بررسی تجویز داروی مشخص توسط این پزشک
+                        if matched_drugs and df_d is not None:
+                            sub_d = df_d[(df_d['clean_doc'] == matched_doc) & (df_d[drug_name_col].isin(matched_drugs))]
+                            doc_drug_qty = int(sub_d[drug_qty_col].sum())
+                            ans = f"{doc_drug_qty} عدد"
 
-        # ۲. تشخیص سوالات تعداد ویزیت پزشک (مثال: تعداد ویزیت دکتر احمدی)
-        elif "ویزیت" in question and df_m is not None:
-            found_doc = None
-            for d in df_m['clean_doc'].unique():
-                if d in question or clean_name(question).find(d) != -1:
-                    found_doc = d
-                    break
-            
-            if found_doc:
-                visit_cols = [c for c in df_m.columns if "ویزیت" in c]
-                if visit_cols:
-                    v_col = visit_cols[0]
-                    v_val = df_m[df_m['clean_doc'] == found_doc][v_col].values
-                    if len(v_val) > 0:
-                        ans = f"{int(v_val[0])} ویزیت"
-
-        # ۳. تشخیص سوالات میانگین درمانگاه در یک شاخص
+        # سناریوی ۴: میانگین درمانگاه در یک شاخص
         elif "میانگین" in question and df_m is not None:
-            for m in df_m.columns[1:]:
-                if m in question:
-                    avg_v = pd.to_numeric(df_m[m], errors='coerce').mean()
+            for m_col in df_m.columns[1:]:
+                if m_col != 'clean_doc' and m_col in question:
+                    avg_v = pd.to_numeric(df_m[m_col], errors='coerce').mean()
                     ans = f"{round(avg_v, 2)}"
                     break
-
-        # ۴. جستجوی عمومی در شاخص‌های جدول عمومی برای یک پزشک خاص
-        elif df_m is not None:
-            found_doc = None
-            for d in df_m['clean_doc'].unique():
-                if d in question:
-                    found_doc = d
-                    break
-            if found_doc:
-                for m in df_m.columns[1:]:
-                    if m in question:
-                        val = df_m[df_m['clean_doc'] == found_doc][m].values
-                        if len(val) > 0:
-                            ans = f"{val[0]}"
-                            break
 
         answers.append(ans)
 
