@@ -304,6 +304,104 @@ def get_clinical_guideline(metric_name, user_val, avg_val):
             f"میزان تجویز شما در شاخص **{metric_name}** با میانگین استاندارد درمانگاه فاصله دارد."
         )
 
+# ------------------ موتور هوشمند پاسخگویی به سوالات اکسل ------------------
+def process_questionnaire(df_q, df_main, df_drugs):
+    """پردازش خط به خط سوالات اکسل و استخراج پاسخ از دیتای پایه"""
+    q_col = df_q.columns[0]  # ستون اول: سوالات
+    answers = []
+
+    # آماده‌سازی دیتای دارویی و عمومی
+    df_d = df_drugs.copy() if df_drugs is not None else None
+    if df_d is not None and not df_d.empty:
+        doc_d_col = df_d.columns[0]
+        drug_name_col = df_d.columns[1]
+        drug_qty_col = df_d.columns[2]
+        df_d[drug_qty_col] = pd.to_numeric(df_d[drug_qty_col], errors='coerce').fillna(0)
+        df_d['clean_doc'] = df_d[doc_d_col].apply(clean_name)
+        df_d[drug_name_col] = df_d[drug_name_col].astype(str).str.strip()
+
+    df_m = df_main.copy() if df_main is not None else None
+    if df_m is not None and not df_m.empty:
+        doc_m_col = df_m.columns[0]
+        df_m['clean_doc'] = df_m[doc_m_col].apply(clean_name)
+
+    for idx, row in df_q.iterrows():
+        question = str(row[q_col]).strip()
+        ans = "پاسخی یافت نشد"
+
+        if not question or question.lower() == 'nan':
+            answers.append("")
+            continue
+
+        # ۱. تشخیص سوالات بیشترین تجویز یک دارو (مثال: بیشترین تجویز دگزا)
+        if ("بیشترین" in question or "بالاترین" in question) and ("دارو" in question or "تجویز" in question or df_d is not None):
+            found_drug = None
+            if df_d is not None:
+                all_drugs = df_d[drug_name_col].unique()
+                for d in sorted(all_drugs, key=len, reverse=True):
+                    if d.lower() in question.lower():
+                        found_drug = d
+                        break
+
+            if found_drug:
+                sub_d = df_d[df_d[drug_name_col] == found_drug]
+                grouped = sub_d.groupby('clean_doc')[drug_qty_col].sum()
+                if not grouped.empty and grouped.max() > 0:
+                    top_doc = grouped.idxmax()
+                    max_val = int(grouped.max())
+                    ans = f"{top_doc} (با تعداد {max_val} عدد)"
+                else:
+                    ans = "بدون تجویز"
+
+        # ۲. تشخیص سوالات تعداد ویزیت پزشک (مثال: تعداد ویزیت دکتر احمدی)
+        elif "ویزیت" in question and df_m is not None:
+            found_doc = None
+            for d in df_m['clean_doc'].unique():
+                if d in question or clean_name(question).find(d) != -1:
+                    found_doc = d
+                    break
+            
+            if found_doc:
+                visit_cols = [c for c in df_m.columns if "ویزیت" in c]
+                if visit_cols:
+                    v_col = visit_cols[0]
+                    v_val = df_m[df_m['clean_doc'] == found_doc][v_col].values
+                    if len(v_val) > 0:
+                        ans = f"{int(v_val[0])} ویزیت"
+
+        # ۳. تشخیص سوالات میانگین درمانگاه در یک شاخص
+        elif "میانگین" in question and df_m is not None:
+            for m in df_m.columns[1:]:
+                if m in question:
+                    avg_v = pd.to_numeric(df_m[m], errors='coerce').mean()
+                    ans = f"{round(avg_v, 2)}"
+                    break
+
+        # ۴. جستجوی عمومی در شاخص‌های جدول عمومی برای یک پزشک خاص
+        elif df_m is not None:
+            found_doc = None
+            for d in df_m['clean_doc'].unique():
+                if d in question:
+                    found_doc = d
+                    break
+            if found_doc:
+                for m in df_m.columns[1:]:
+                    if m in question:
+                        val = df_m[df_m['clean_doc'] == found_doc][m].values
+                        if len(val) > 0:
+                            ans = f"{val[0]}"
+                            break
+
+        answers.append(ans)
+
+    df_result = df_q.copy()
+    if len(df_result.columns) > 1:
+        df_result[df_result.columns[1]] = answers
+    else:
+        df_result['پاسخ استخراج‌شده'] = answers
+
+    return df_result
+
 # ------------------ وضعیت نشست (Session State) ------------------
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
@@ -561,14 +659,15 @@ else:
             df_main, err_main = load_period_data(active_p_id, "main")
             df_drugs, err_drugs = load_period_data(active_p_id, "drugs")
 
-            tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+            tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
                 "📁 بارگذاری فایل‌های دوره", 
                 "📈 مقایسه کل پزشکان", 
                 "👤 بررسی فردی پزشکان", 
                 "💊 درصد دارو به پزشک", 
                 "📋 دارو به نسخه/ویزیت",
                 "⚙️ تنظیمات شاخص‌ها",
-                "📝 بازخوردهای مدیریت"
+                "📝 بازخوردهای مدیریت",
+                "🤖 پاسخگویی به پرسش‌نامه"
             ])
 
             # --- تب ۱: بارگذاری ---
@@ -885,6 +984,40 @@ else:
                         save_settings()
                         st.success("توصیه اختصاصی ذخیره شد.")
 
+            # --- تب ۸: پاسخگویی خودکار به پرسش‌نامه اکسل ---
+            with tab8:
+                st.header("🤖 پاسخگویی خودکار به پرسش‌نامه و سوالات اکسل")
+                st.info("فایل اکسل سوالات خود را بارگذاری کنید. سیستم به صورت خودکار پاسخ‌ها را از داده‌های این دوره استخراج و در فایل تکمیل می‌کند.")
+
+                up_q = st.file_uploader("بارگذاری فایل سوالات (Excel / CSV)", type=["xlsx", "xls", "csv"], key="up_q_file")
+
+                if up_q is not None:
+                    df_q_in, err_q = read_uploaded_file(up_q)
+                    if df_q_in is not None and not df_q_in.empty:
+                        st.write("📋 **پیش‌نمایش فایل سوالات بارگذاری‌شده:**")
+                        st.dataframe(df_q_in.head(5), use_container_width=True)
+
+                        if st.button("⚡ تحلیل و پاسخ‌دهی خودکار به سوالات", type="primary"):
+                            with st.spinner("در حال استخراج پاسخ‌ها از دیتابیس دوره..."):
+                                df_answered = process_questionnaire(df_q_in, df_main, df_drugs)
+                                
+                                st.success("✅ پاسخ‌دهی با موفقیت انجام شد.")
+                                st.subheader("📊 جدول سوالات به همراه پاسخ‌های استخراج‌شده")
+                                st.dataframe(df_answered, use_container_width=True)
+
+                                # خروجی اکسل جهت دانلود
+                                output_path = "answered_questionnaire.xlsx"
+                                df_answered.to_excel(output_path, index=False)
+                                with open(output_path, "rb") as f:
+                                    st.download_button(
+                                        label="📥 دانلود فایل اکسل پاسخ‌ها",
+                                        data=f,
+                                        file_name=f"پاسخ_سوالات_{p_name}.xlsx",
+                                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                    )
+                    else:
+                        st.error(f"خطا در خواندن فایل سوالات: {err_q}")
+
     # =============================================================
     # ۲. بخش پزشکان (DOCTOR VIEW)
     # =============================================================
@@ -1003,7 +1136,6 @@ else:
 
                     st.subheader("📊 مقایسه تصویری کارنامه شما در برابر میانگین درمانگاه")
 
-                    # --- افزودن کادر انتخاب شاخص قبل از رسم نمودار ---
                     chart_metrics_options = ["نمایش یکجای تمام شاخص‌ها"] + list(metrics)
                     selected_doc_chart_metric = st.selectbox(
                         "📌 شاخص مورد نظر جهت نمایش در نمودار را انتخاب کنید:",
