@@ -6,6 +6,7 @@ import json
 import re
 import time
 import shutil
+from difflib import SequenceMatcher
 
 # ------------------ تنظیمات اولیه و پوشه‌بندی ------------------
 st.set_page_config(page_title="سیستم جامع ارزیابی و تایم‌لاین نسخ درمانگاه", layout="wide")
@@ -20,33 +21,42 @@ def init_storage():
 
 init_storage()
 
-# ------------------ تابع هوشمند و پیشرفته پاکسازی و تطبیق اسامی ------------------
-def clean_name(text):
+# ------------------ توابع پیشرفته نرمال‌سازی و تحلیل متن ------------------
+def normalize_text(text):
+    """نرمال‌سازی کامل متن، تبدیل اعداد فارسی به انگلیسی و حذف پیشوندها"""
     if not text or pd.isna(text):
         return ""
-    text = str(text)
+    text = str(text).lower().strip()
     
-    # ۱. نرمال‌سازی حروف عربی/فارسی و فاصله‌های پنهان/نیم‌فاصله
+    # ۱. تبدیل اعداد فارسی/عربی به انگلیسی
+    persian_digits = '۰۱۲۳۴۵۶۷۸۹'
+    arabic_digits = '0123456789' # fallback
+    trans_table = str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')
+    text = text.translate(trans_table)
+    
+    # ۲. استانداردسازی حروف فارسی و عربی
     text = text.replace('ي', 'ی').replace('ك', 'ک').replace('ة', 'ه')
     text = text.replace('آ', 'ا').replace('أ', 'ا').replace('إ', 'ا')
     text = text.replace('\u200c', ' ').replace('\xa0', ' ')
     
-    # ۲. تبدیل علائم نگارشی متصل به عنوان‌ها به فاصله
-    text = re.sub(r'[\.:\-_]', ' ', text)
+    # ۳. حذف علائم نگارشی
+    text = re.sub(r'[^\w\s]', ' ', text)
     
-    # ۳. حذف هوشمند کلیه پیشوندها (حتی به صورت ترکیبی و چندتایی)
-    prefixes = ['دکتر', 'پزشک', 'مهندس', 'خانم', 'آقای', 'آقا', 'اقای', 'جناب', 'سرکار', 'استاد', 'سید', 'سیده']
-    prefix_pattern = r'^\s*(' + '|'.join(prefixes) + r')\s+'
+    # ۴. حذف پیشوندها
+    prefixes = ['دکتر', 'پزشک', 'مهندس', 'خانم', 'آقای', 'اقای', 'آقا', 'جناب', 'سرکار', 'استاد', 'سید', 'سیده']
+    words = [w for w in text.split() if w not in prefixes]
     
-    while re.search(prefix_pattern, text, flags=re.IGNORECASE):
-        text = re.sub(prefix_pattern, '', text, flags=re.IGNORECASE).strip()
-        
-    # ۴. حذف فاصله‌های اضافه بین کلمات
-    return " ".join(text.split())
+    return " ".join(words)
+
+def clean_name(text):
+    return normalize_text(text)
+
+def get_similarity(a, b):
+    """محاسبه میزان شباهت دو رشته متنی (بین 0 تا 1)"""
+    return SequenceMatcher(None, normalize_text(a), normalize_text(b)).ratio()
 
 # ------------------ موتور خوانش هوشمند فایل‌های اکسل/HTML/CSV ------------------
 def read_uploaded_file(uploaded_file):
-    """خوانش هوشمند انواع فایل اکسل (xlsx, xls, html-excel, csv)"""
     try:
         try:
             df = pd.read_excel(uploaded_file)
@@ -151,7 +161,6 @@ def load_period_data(period_id, file_type):
         return None, f"خطا در خوانش فایل: {str(e)}"
 
 def get_all_registered_doctors():
-    """استخراج لیست تمام پزشکان از کل دوره‌های ثبت‌شده برای پنل ورود"""
     doctors = set()
     periods = get_periods_meta()
     for p in periods:
@@ -163,6 +172,8 @@ def get_all_registered_doctors():
     return sorted([d for d in doctors if d])
 
 # ------------------ تنظیمات عمومی ------------------
+SETTINGS_FILE = "system_settings.json"
+
 def save_settings():
     settings = {
         "passwords": st.session_state.doctor_passwords,
@@ -207,7 +218,7 @@ def calculate_ranks(df, metrics):
         df_ranks[col] = ranks.fillna(0).astype(int)
     return df_ranks
 
-# ------------------ توابع دسته‌بندی و فیلتر داروها ------------------
+# ------------------ دسته‌بندی داروها ------------------
 def classify_drug(drug_name):
     name_lower = str(drug_name).strip().lower()
     
@@ -285,113 +296,167 @@ def get_clinical_guideline(metric_name, user_val, avg_val):
     if any(kw in metric_lower for kw in ['آنتی', 'بیوتیک', 'چرك', 'عفونت', 'کپسول']):
         return (
             "🦠 **گایدلاین مدیریت تجویز آنتی‌بیوتیک (CDC & WHO Antibiotic Stewardship):**\n\n"
-            "طبق گزارش‌های سازمان جهانی بهداشت (WHO) و CDC، بیش از ۶۰ تا ۷۰ درصد عفونت‌های حاد تنفسی فوقانی در مراقبت‌های سرپایی منشأ ویروسی دارند و نیازی به دریافت آنتی‌بیوتیک ندارند. "
-            "توصیه می‌شود در مواجهه با علائم تنفسی خفیف تا متوسط، از الگوریتم طبقه‌بندی **AWaRe** استفاده کرده و درمان‌های حمایتی را در اولویت قرار دهید."
+            "طبق گزارش‌های WHO و CDC، اکثر عفونت‌های تنفسی فوقانی ویروسی هستند و نیازی به آنتی‌بیوتیک ندارند. "
+            "توصیه می‌شود در صورت علائم خفیف، درمان‌های حمایتی را در اولویت قرار دهید."
         )
     elif any(kw in metric_lower for kw in ['تزریق', 'آمپول', 'ویال']):
         return (
-            "💉 **راهنمای تجویز منطقی داروهای تزریقی (WHO Injection Safety Guidelines):**\n\n"
-            "بر اساس استانداردهای WHO، اولویت اول در بیماران سرپایی همواره با **مسیر خوراکی** است. زیست‌دست‌یابی اکثر داروهای خوراکی مدرن برابری لازم با فرم تزریقی را دارد."
+            "💉 **راهنمای تجویز منطقی داروهای تزریقی (WHO Guidelines):**\n\n"
+            "اولویت اول در بیماران سرپایی همواره با **مسیر خوراکی** است."
         )
     elif any(kw in metric_lower for kw in ['کورتون', 'استروئید', 'دگزا', 'بتامتازون', 'هیدروکورتیزون']):
         return (
             "🛡️ **گایدلاین بالینی مصرف کورتیکواستروئیدها (NICE & WHO):**\n\n"
-            "تجویز بی‌رویه کورتون‌های سیستمیک در بیماری‌های ویروسی شایع، علاوه بر تضعیف سیستم ایمنی، خطر عوارض متابولیک و اختلالات هورمونی را افزایش می‌دهد."
+            "تجویز بی‌رویه کورتون‌های سیستمیک خطر عوارض متابولیک و تضعیف ایمنی را به همراه دارد."
         )
     else:
-        return (
-            f"📖 **توصیه علمی بر اساس پزشکی مبتنی بر شواهد (EBM) در شاخص {metric_name}:**\n\n"
-            f"میزان تجویز شما در شاخص **{metric_name}** با میانگین استاندارد درمانگاه فاصله دارد."
-        )
+        return f"📖 **توصیه علمی در شاخص {metric_name}:** میزان تجویز شما با میانگین درمانگاه فاصله دارد."
 
-# ------------------ دیکشنری نگاشت مترادف‌های دارویی (فارسی به انگلیسی) ------------------
+# ------------------ دیکشنری گسترده مترادف‌های دارویی ------------------
 DRUG_SYNONYMS = {
-    'دگزا': ['dexa', 'dexamethasone', 'دگزا'],
-    'بتامتازون': ['beta', 'betamethasone', 'بتا'],
-    'آموکسی': ['amox', 'amoxicillin', 'اموکسی'],
-    'آزیترو': ['azithro', 'azithromycin', 'ازیترو'],
-    'سفیکسیم': ['cefix', 'cefixime'],
-    'سفتریام': ['ceftriax', 'ceftriaxone'],
-    'پنی‌سیلین': ['penicillin', 'pen', 'پنی'],
-    'ژلوفن': ['gelofen', 'ibuprofen', 'پروفن'],
-    'مفنامیک': ['mefenamic'],
-    'دیکلوفناک': ['diclofenac'],
+    'دگزا': ['dexa', 'dexamethasone', 'دگزا', 'دگزامتازون'],
+    'بتامتازون': ['beta', 'betamethasone', 'بتا', 'بتامتازون'],
+    'آموکسی': ['amox', 'amoxicillin', 'اموکسی', 'آموکسی'],
+    'آزیترو': ['azithro', 'azithromycin', 'ازیترو', 'آزیترومایسین'],
+    'سفیکسیم': ['cefix', 'cefixime', 'سفیکسیم'],
+    'سفتریام': ['ceftriax', 'ceftriaxone', 'سفتریام', 'سفتریآکسون'],
+    'پنی‌سیلین': ['penicillin', 'pen', 'پنی', 'پنی‌سیلین', 'پنیسیلین'],
+    'ژلوفن': ['gelofen', 'ibuprofen', 'پروفن', 'ایبوپروفن', 'ژلوفن'],
+    'مفنامیک': ['mefenamic', 'مفنامیک'],
+    'دیکلوفناک': ['diclofenac', 'دیکلوفناک'],
     'سرم': ['infusion', 'sodium', 'dextrose', 'saline', 'solution', 'سرم'],
-    'دیفن': ['diphen', 'diphenhydramine'],
-    'استامینوفن': ['acetaminophen', 'paracetamol'],
-    'هیدروکورتیزون': ['hydrocortisone'],
-    'پرنیزولون': ['prednisolone'],
-    'کتورولاک': ['ketorolac'],
+    'دیفن': ['diphen', 'diphenhydramine', 'دیفن'],
+    'استامینوفن': ['acetaminophen', 'paracetamol', 'استامینوفن'],
+    'هیدروکورتیزون': ['hydrocortisone', 'هیدروکورتیزون'],
+    'پرنیزولون': ['prednisolone', 'پرنیزولون'],
+    'کتورولاک': ['ketorolac', 'کتورولاک'],
 }
 
-def match_doctor_in_text(text, doc_list):
-    """تطبیق هوشمند نام پزشک بر اساس اسم کامل یا نام خانوادگی"""
-    clean_q = clean_name(text)
-    # ۱. بررسی تطبیق دقیق
-    for doc in doc_list:
-        if doc and doc in clean_q:
-            return doc
-    # ۲. بررسی تطبیق بر اساس نام خانوادگی (کلمات با طول ۳ حرف به بالا)
-    for doc in doc_list:
-        parts = doc.split()
-        for part in parts:
-            if len(part) >= 3 and part in clean_q:
-                return doc
-    return None
-
-def find_matching_drugs_in_df(question, all_df_drugs):
-    """پیدا کردن تمامی داروهای درون اکسل که با سوال مطابقت دارند"""
-    q_lower = question.lower()
-    matched_drugs = []
+# ------------------ موتور هوشمند تحلیل مفهوم و پاسخگویی به پرسش‌نامه ------------------
+def extract_entities_and_intent(question, all_docs, all_drugs, all_metrics):
+    """
+    تحلیل ساختاری و مفهومی سوال:
+    - تشخیص قصد سوال (بیشترین، کمترین، مجموع، میانگین، مقدار مستقیم)
+    - استخراج نام پزشک (حتی با اسم ناقص)
+    - استخراج نام دارو (حتی با مترادف)
+    - استخراج نام شاخص عمومی (ویزیت، آزمایش، نسخه و...)
+    """
+    q_norm = normalize_text(question)
+    words = q_norm.split()
     
-    # الف) بررسی دیکشنری مترادف‌ها
-    for syn_key, syn_targets in DRUG_SYNONYMS.items():
-        if syn_key in q_lower:
-            for d in all_df_drugs:
-                d_str = str(d).lower()
-                if any(target in d_str for target in syn_targets):
-                    matched_drugs.append(d)
-                    
-    # ب) بررسی مستقیم عبارت انگلیسی یا فارسی
-    if not matched_drugs:
-        for d in all_df_drugs:
-            d_str = str(d).lower().strip()
-            # استخراج کلمات اصلی دارو (حداقل ۴ حرف)
-            words = [w for w in re.split(r'\W+', d_str) if len(w) >= 4 and w not in ['capsule', 'tablet', 'syrup', 'injection']]
-            if words and any(w in q_lower for w in words):
-                matched_drugs.append(d)
-                
-    return list(set(matched_drugs))
+    # ۱. تشخیص قصد (Intent)
+    intent = "DIRECT"
+    if any(k in q_norm for k in ["بیشترین", "بالاترین", "کدام پزشک بیشترین", "زیادترین", "رتبه اول"]):
+        intent = "MAX"
+    elif any(k in q_norm for k in ["کمترین", "پایین ترین", "پایینترین", "کمتر"]):
+        intent = "MIN"
+    elif any(k in q_norm for k in ["مجموع", "تعداد کل", "کل تجویز", "جمع"]):
+        intent = "SUM"
+    elif any(k in q_norm for k in ["میانگین", "متوسط"]):
+        intent = "AVG"
 
-# ------------------ موتور هوشمند پاسخگویی پیشرفته به پرسش‌نامه ------------------
+    # ۲. استخراج هوشمند نام پزشک (Doctor Matching)
+    matched_doc = None
+    best_doc_score = 0.0
+    for doc in all_docs:
+        doc_norm = normalize_text(doc)
+        if not doc_norm:
+            continue
+        # اگر نام کامل در سوال بود
+        if doc_norm in q_norm:
+            matched_doc = doc
+            break
+        # بررسی کلمات نام (مثلاً نام خانوادگی)
+        for part in doc_norm.split():
+            if len(part) >= 3 and part in words:
+                score = len(part) / len(q_norm)
+                if score > best_doc_score:
+                    best_doc_score = score
+                    matched_doc = doc
+
+    # ۳. استخراج هوشمند نام دارو (Drug Matching)
+    matched_drugs = []
+    # الف) از طریق دیکشنری مترادف‌ها
+    for syn_key, targets in DRUG_SYNONYMS.items():
+        if syn_key in q_norm:
+            for d in all_drugs:
+                d_lower = str(d).lower()
+                if any(t in d_lower for t in targets):
+                    matched_drugs.append(d)
+    
+    # ب) از طریق تطبیق کلمات انگلیسی/فارسی موجود در لیست داروهای اکسل
+    if not matched_drugs:
+        for d in all_drugs:
+            d_norm = normalize_text(d)
+            d_parts = [p for p in d_norm.split() if len(p) >= 3 and p not in ['tab', 'cap', 'inj', 'amp', 'vial', 'syrup', 'susp', 'solution', 'mg']]
+            if d_parts and any(p in q_norm for p in d_parts):
+                matched_drugs.append(d)
+
+    matched_drugs = list(set(matched_drugs))
+
+    # ۴. استخراج هوشمند ستون/شاخص عمومی (Metric Matching)
+    matched_metric = None
+    best_m_score = 0.0
+    for m in all_metrics:
+        m_norm = normalize_text(m)
+        if not m_norm:
+            continue
+        # بررسی شباهت کلمات شاخص با سوال
+        for m_part in m_norm.split():
+            if len(m_part) >= 3 and m_part in q_norm:
+                matched_metric = m
+                break
+        if matched_metric:
+            break
+            
+        # شباهت متنی کلی
+        sim = get_similarity(m_norm, q_norm)
+        if sim > 0.4 and sim > best_m_score:
+            best_m_score = sim
+            matched_metric = m
+
+    return {
+        "intent": intent,
+        "doctor": matched_doc,
+        "drugs": matched_drugs,
+        "metric": matched_metric
+    }
+
 def process_questionnaire(df_q, df_main, df_drugs):
-    """پردازش پیشرفته و هوشمند سوالات اکسل با توانایی تطبیق فارسی به انگلیسی و اسامی پزشکان"""
+    """پردازش پیشرفته و هوشمند سوالات اکسل بر اساس مفهوم، قصد سوال و تطبیق هوشمند"""
+    if df_q is None or df_q.empty:
+        return df_q
+
     q_col = df_q.columns[0]
     answers = []
 
-    # ۱. آماده‌سازی داده‌های دارویی و تشخیص ستون‌ها
+    # --- آماده‌سازی داده‌های دارویی ---
     df_d = df_drugs.copy() if df_drugs is not None else None
     doc_d_col, drug_name_col, drug_qty_col = None, None, None
+    all_drugs = []
+    
     if df_d is not None and not df_d.empty:
         cols = df_d.columns
-        # تشخیص ستون پزشک
-        doc_d_col = next((c for c in cols if any(k in str(c).lower() for k in ['پزشک', 'دکتر', 'طبیب', 'doc'])), cols[0])
-        # تشخیص ستون دارو
-        drug_name_col = next((c for c in cols if any(k in str(c).lower() for k in ['دارو', 'نام دارو', 'drug', 'item'])), cols[1] if len(cols) > 1 else cols[0])
-        # تشخیص ستون تعداد
+        doc_d_col = next((c for c in cols if any(k in str(c).lower() for k in ['پزشک', 'دکتر', 'doc'])), cols[0])
+        drug_name_col = next((c for c in cols if any(k in str(c).lower() for k in ['دارو', 'drug', 'item'])), cols[1] if len(cols) > 1 else cols[0])
         drug_qty_col = next((c for c in cols if any(k in str(c).lower() for k in ['تعداد', 'مقدار', 'qty', 'count'])), cols[2] if len(cols) > 2 else cols[-1])
 
         df_d[drug_qty_col] = pd.to_numeric(df_d[drug_qty_col], errors='coerce').fillna(0)
         df_d['clean_doc'] = df_d[doc_d_col].apply(clean_name)
         df_d[drug_name_col] = df_d[drug_name_col].astype(str).str.strip()
+        all_drugs = df_d[drug_name_col].unique().tolist()
 
-    # ۲. آماده‌سازی داده‌های عمومی و تشخیص ستون‌ها
+    # --- آماده‌سازی داده‌های عمومی ---
     df_m = df_main.copy() if df_main is not None else None
     doc_m_col = None
+    all_metrics = []
+    
     if df_m is not None and not df_m.empty:
         doc_m_col = df_m.columns[0]
         df_m['clean_doc'] = df_m[doc_m_col].apply(clean_name)
+        all_metrics = [c for c in df_m.columns if c not in [doc_m_col, 'clean_doc']]
 
+    # لیست تمام پزشکان
     all_docs = []
     if df_m is not None:
         all_docs.extend(df_m['clean_doc'].unique().tolist())
@@ -399,24 +464,26 @@ def process_questionnaire(df_q, df_main, df_drugs):
         all_docs.extend(df_d['clean_doc'].unique().tolist())
     all_docs = list(set([d for d in all_docs if d]))
 
-    all_drugs = df_d[drug_name_col].unique().tolist() if df_d is not None else []
-
-    # پردازش خط به خط
+    # --- پردازش خط به خط پرسش‌نامه ---
     for idx, row in df_q.iterrows():
         question = str(row[q_col]).strip()
-        ans = "پاسخی یافت نشد"
-
+        
         if not question or question.lower() == 'nan':
             answers.append("")
             continue
 
-        q_clean = clean_name(question)
-        matched_doc = match_doctor_in_text(question, all_docs)
-        matched_drugs = find_matching_drugs_in_df(question, all_drugs)
+        # تحلیل مفهومی سوال
+        parsed = extract_entities_and_intent(question, all_docs, all_drugs, all_metrics)
+        intent = parsed["intent"]
+        doc = parsed["doctor"]
+        drugs = parsed["drugs"]
+        metric = parsed["metric"]
 
-        # سناریوی ۱: بیشترین / بالاترین تجویز یک دارو (بین پزشکان)
-        if ("بیشترین" in question or "بالاترین" in question or "کدام پزشک" in question) and matched_drugs and df_d is not None:
-            sub_d = df_d[df_d[drug_name_col].isin(matched_drugs)]
+        ans = "پاسخی یافت نشد"
+
+        # سناریو ۱: سوال در مورد «بیشترین» تجویز یک دارو است
+        if intent == "MAX" and drugs and df_d is not None:
+            sub_d = df_d[df_d[drug_name_col].isin(drugs)]
             grouped = sub_d.groupby('clean_doc')[drug_qty_col].sum()
             if not grouped.empty and grouped.max() > 0:
                 top_doc = grouped.idxmax()
@@ -425,45 +492,47 @@ def process_questionnaire(df_q, df_main, df_drugs):
             else:
                 ans = "بدون تجویز"
 
-        # سناریوی ۲: مجموع کل تجویز یک دارو در درمانگاه
-        elif ("تعداد" in question or "مجموع" in question or "چند" in question) and matched_drugs and not matched_doc and df_d is not None:
-            sub_d = df_d[df_d[drug_name_col].isin(matched_drugs)]
+        # سناریو ۲: سوال در مورد «بیشترین» در یک شاخص عمومی است (مثلا بیشترین ویزیت یا آزمایش)
+        elif intent == "MAX" and metric and df_m is not None:
+            df_m[metric] = pd.to_numeric(df_m[metric], errors='coerce').fillna(0)
+            top_row = df_m.loc[df_m[metric].idxmax()]
+            ans = f"دکتر {top_row['clean_doc']} (مقدار: {top_row[metric]})"
+
+        # سناریو ۳: مجموع/تعداد کل یک دارو در درمانگاه
+        elif intent == "SUM" and drugs and df_d is not None and not doc:
+            sub_d = df_d[df_d[drug_name_col].isin(drugs)]
             total_qty = int(sub_d[drug_qty_col].sum())
             ans = f"{total_qty} عدد"
 
-        # سناریوی ۳: اطلاعات خاص یک پزشک (ویزیت، نسخ، شاخص‌ها)
-        elif matched_doc and df_m is not None:
-            doc_row = df_m[df_m['clean_doc'] == matched_doc]
-            if not doc_row.empty:
-                # اگر سوال درباره ویزیت بود
-                if "ویزیت" in question:
-                    visit_cols = [c for c in df_m.columns if "ویزیت" in str(c)]
-                    if visit_cols:
-                        v_val = doc_row[visit_cols[0]].values[0]
-                        ans = f"{int(v_val)} ویزیت" if pd.notna(v_val) else "0 ویزیت"
-                else:
-                    # جستجوی نام شاخص در ستون‌های عمومی
-                    found_metric = False
-                    for m_col in df_m.columns[1:]:
-                        if m_col != 'clean_doc' and m_col in question:
-                            val = doc_row[m_col].values[0]
-                            ans = f"{val}"
-                            found_metric = True
-                            break
-                    if not found_metric:
-                        # اگر شاخص خاصی پیدا نشد، بررسی تجویز داروی مشخص توسط این پزشک
-                        if matched_drugs and df_d is not None:
-                            sub_d = df_d[(df_d['clean_doc'] == matched_doc) & (df_d[drug_name_col].isin(matched_drugs))]
-                            doc_drug_qty = int(sub_d[drug_qty_col].sum())
-                            ans = f"{doc_drug_qty} عدد"
+        # سناریو ۴: میانگین درمانگاه در یک شاخص عمومی
+        elif intent == "AVG" and metric and df_m is not None:
+            avg_val = pd.to_numeric(df_m[metric], errors='coerce').mean()
+            ans = f"{round(avg_val, 2)}"
 
-        # سناریوی ۴: میانگین درمانگاه در یک شاخص
-        elif "میانگین" in question and df_m is not None:
-            for m_col in df_m.columns[1:]:
-                if m_col != 'clean_doc' and m_col in question:
-                    avg_v = pd.to_numeric(df_m[m_col], errors='coerce').mean()
-                    ans = f"{round(avg_v, 2)}"
-                    break
+        # سناریو ۵: اطلاعات یک پزشک خاص
+        elif doc:
+            # الف) اگر سوال درباره یک داروی خاص توسط این پزشک باشد
+            if drugs and df_d is not None:
+                sub_d = df_d[(df_d['clean_doc'] == doc) & (df_d[drug_name_col].isin(drugs))]
+                doc_drug_qty = int(sub_d[drug_qty_col].sum())
+                ans = f"{doc_drug_qty} عدد"
+            # ب) اگر سوال درباره یک شاخص عمومی این پزشک باشد
+            elif metric and df_m is not None:
+                doc_row = df_m[df_m['clean_doc'] == doc]
+                if not doc_row.empty:
+                    val = doc_row[metric].values[0]
+                    ans = f"{val}"
+            # ج) اگر شاخص مشخص نشد اما سوال وجود داشت
+            elif df_m is not None:
+                doc_row = df_m[df_m['clean_doc'] == doc]
+                if not doc_row.empty and len(all_metrics) > 0:
+                    val = doc_row[all_metrics[0]].values[0]
+                    ans = f"{all_metrics[0]}: {val}"
+
+        # سناریو ۶: تطبیق عمومی شاخص اگر پزشک مشخص نشده بود
+        elif metric and df_m is not None and intent == "DIRECT":
+            avg_v = pd.to_numeric(df_m[metric], errors='coerce').mean()
+            ans = f"میانگین درمانگاه: {round(avg_v, 2)}"
 
         answers.append(ans)
 
@@ -721,7 +790,7 @@ else:
                             fig_avg.update_layout(xaxis_type='category')
                             st.plotly_chart(fig_avg, use_container_width=True)
 
-        # ------------------ حالت B: مدیریت داخل یک دوره مشخص ------------------
+        # ------------------ مدیریت داخل یک دوره مشخص ------------------
         else:
             active_p_id = st.session_state.active_period_id
             active_p_info = next((p for p in periods_meta if p["id"] == active_p_id), None)
@@ -1057,10 +1126,10 @@ else:
                         save_settings()
                         st.success("توصیه اختصاصی ذخیره شد.")
 
-            # --- تب ۸: پاسخگویی خودکار به پرسش‌نامه اکسل ---
+            # --- تب ۸: پاسخگویی هوشمند به پرسش‌نامه اکسل ---
             with tab8:
-                st.header("🤖 پاسخگویی خودکار به پرسش‌نامه و سوالات اکسل")
-                st.info("فایل اکسل سوالات خود را بارگذاری کنید. سیستم به صورت خودکار پاسخ‌ها را از داده‌های این دوره استخراج و در فایل تکمیل می‌کند.")
+                st.header("🤖 پاسخگویی هوشمند و مفهومی به پرسش‌نامه اکسل")
+                st.info("فایل اکسل سوالات خود را بارگذاری کنید. سیستم مفهوم سوالات را تحلیل کرده و پاسخ را هم‌زمان از اکسل عمومی (تب ۱) و اکسل اقلام دارویی (تب ۱) استخراج خواهد کرد.")
 
                 up_q = st.file_uploader("بارگذاری فایل سوالات (Excel / CSV)", type=["xlsx", "xls", "csv"], key="up_q_file")
 
@@ -1070,11 +1139,11 @@ else:
                         st.write("📋 **پیش‌نمایش فایل سوالات بارگذاری‌شده:**")
                         st.dataframe(df_q_in.head(5), use_container_width=True)
 
-                        if st.button("⚡ تحلیل و پاسخ‌دهی خودکار به سوالات", type="primary"):
-                            with st.spinner("در حال استخراج پاسخ‌ها از دیتابیس دوره..."):
+                        if st.button("⚡ تحلیل مفهومی و پاسخ‌دهی خودکار", type="primary"):
+                            with st.spinner("در حال پردازش مفاهیم و جستجو در فایل‌های بارگذاری‌شده در تب ۱..."):
                                 df_answered = process_questionnaire(df_q_in, df_main, df_drugs)
                                 
-                                st.success("✅ پاسخ‌دهی با موفقیت انجام شد.")
+                                st.success("✅ پاسخ‌دهی بر اساس تحلیل مفهوم انجام شد.")
                                 st.subheader("📊 جدول سوالات به همراه پاسخ‌های استخراج‌شده")
                                 st.dataframe(df_answered, use_container_width=True)
 
